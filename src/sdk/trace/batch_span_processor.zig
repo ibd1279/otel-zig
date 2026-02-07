@@ -277,31 +277,39 @@ pub const BatchSpanProcessor = struct {
         return result.asFlushResult().asProcessResult();
     }
 
-    /// Export all queued spans (must be called with mutex held)
-    fn exportBatchLocked(self: *BatchSpanProcessor) void {
+    /// Export all queued spans, releasing the mutex during HTTP export.
+    /// Must be called with mutex held. Mutex is held again on return.
+    fn exportBatchUnlocked(self: *BatchSpanProcessor) void {
         if (self.is_shutdown.load(.acquire) or self.span_queue.items.len == 0) {
             return;
         }
 
-        // Export all queued spans
+        // Drain queue under the lock
+        const spans_to_export = self.span_queue.toOwnedSlice(self.allocator) catch return;
+
+        // Release mutex during export — HTTP calls can take seconds
+        self.mutex.unlock(self.io);
+
         if (self.exporter) |exporter| {
-            for (self.span_queue.items) |item| {
+            for (spans_to_export) |item| {
                 _ = exporter.exportSpans(&.{item.data}, item.resource);
             }
         }
 
-        // Clean up exported spans
-        for (self.span_queue.items) |span| {
+        for (spans_to_export) |span| {
             span.data.deinitOwned(self.allocator);
         }
-        self.span_queue.clearRetainingCapacity();
+        self.allocator.free(spans_to_export);
+
+        // Re-acquire mutex before returning
+        self.mutex.lockUncancelable(self.io);
     }
 
     /// Export all queued spans (acquires mutex)
     fn exportBatch(self: *BatchSpanProcessor) void {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        self.exportBatchLocked();
+        self.exportBatchUnlocked();
     }
 
     /// Background thread function that periodically exports spans
@@ -327,7 +335,8 @@ pub const BatchSpanProcessor = struct {
                 self.export_complete.broadcast(self.io);
             }
 
-            // Do the export
+            // Do the export — exportBatch drains the queue under the lock and
+            // releases the mutex during HTTP export (same pattern as forceFlush).
             self.exportBatch();
         }
     }
