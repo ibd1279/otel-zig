@@ -10,8 +10,11 @@
 
 // HTTP metrics
 pub const HTTP_SERVER_DURATION = "http.server.duration";
+pub const HTTP_SERVER_REQUEST_DURATION = "http.server.request.duration";
 pub const HTTP_SERVER_REQUEST_SIZE = "http.server.request.size";
+pub const HTTP_SERVER_REQUEST_BODY_SIZE = "http.server.request.body.size";
 pub const HTTP_SERVER_RESPONSE_SIZE = "http.server.response.size";
+pub const HTTP_SERVER_RESPONSE_BODY_SIZE = "http.server.response.body.size";
 pub const HTTP_SERVER_ACTIVE_REQUESTS = "http.server.active_requests";
 pub const HTTP_CLIENT_DURATION = "http.client.duration";
 pub const HTTP_CLIENT_REQUEST_SIZE = "http.client.request.size";

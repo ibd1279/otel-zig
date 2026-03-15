@@ -46,6 +46,10 @@ pub const URL_SCHEME = "url.scheme";
 pub const URL_PATH = "url.path";
 pub const URL_QUERY = "url.query";
 pub const URL_FRAGMENT = "url.fragment";
+pub const URL_TEMPLATE = "url.template";
+
+// HTTP route (matched route template)
+pub const HTTP_ROUTE = "http.route";
 
 // User agent
 pub const USER_AGENT_ORIGINAL = "user_agent.original";
