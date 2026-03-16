@@ -66,7 +66,9 @@ pub const TraceIdRatioBasedSampler = struct {
         const threshold: u56 = @as(u56, @truncate(threshold_toobig)) & mask;
 
         const th_bigend = std.mem.nativeToBig(u56, threshold);
-        const th_buffer = std.fmt.bytesToHex(std.mem.asBytes(&th_bigend), .lower);
+        var th_buffer = std.fmt.bytesToHex(std.mem.asBytes(&th_bigend), .lower);
+        th_buffer[14] = '0';
+        th_buffer[15] = '0';
         var th_len: u8 = precision;
         while (th_len > 0) : (th_len -= 1) {
             if (th_buffer[th_len] != '0') break;

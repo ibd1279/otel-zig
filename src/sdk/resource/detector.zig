@@ -106,6 +106,20 @@ pub const ProcessDetector = struct {
                     attrs = attrs.add(.{ .key = "process.executable.name", .value = .{ .string = basename } });
                 }
             },
+            .freebsd => {
+                // Detect process attributes
+                const pid = std.c.getpid();
+                attrs = attrs.add(.{ .key = "process.pid", .value = .{ .int = @intCast(pid) } });
+
+                // Try to read executable path from procfs symlink
+                var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
+                if (std.fs.cwd().readLink("/proc/curproc/file", &exe_buf)) |exe_path| {
+                    const exe_path_owned = try arena.allocator().dupe(u8, exe_path);
+                    const basename = std.fs.path.basename(exe_path_owned);
+                    attrs = attrs.add(.{ .key = "process.executable.path", .value = .{ .string = exe_path_owned } });
+                    attrs = attrs.add(.{ .key = "process.executable.name", .value = .{ .string = basename } });
+                } else |_| {}
+            },
             else => @compileError("unsupported OS."),
         }
 
