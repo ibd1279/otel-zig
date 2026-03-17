@@ -144,6 +144,7 @@ fn parseTraceparentHeader(header_value: []const u8) ?otel_api.trace.Span.Context
 // HTTP context for simulated requests
 const HttpContext = struct {
     traceparent: ?[]const u8,
+    tracestate: ?[]const u8,
     num1: u16,
     num2: u16,
     result: u64,
@@ -321,6 +322,7 @@ fn numberReaderThread(shared_state: *SharedState, config: Config) !void {
         const traceparent = try buildTraceparentHeader(http_span.getSpanContext(), &traceparent_buffer);
         var http_context = HttpContext{
             .traceparent = traceparent,
+            .tracestate = "example-client=reader-thread",
             .num1 = num1,
             .num2 = num2,
             .result = 0,
@@ -609,19 +611,28 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
         // Extract W3C trace context headers
         var ctx_builder = otel_api.ContextBuilder.init(shared_state.allocator);
         var traceparent_header: ?[]const u8 = null;
+        var tracestate_header: ?[]const u8 = null;
 
-        // Look for traceparent header in request headers
+        // Look for traceparent and tracestate headers in request headers
         var header_iterator = request.iterateHeaders();
         while (header_iterator.next()) |header| {
             if (std.ascii.eqlIgnoreCase(header.name, "traceparent")) {
                 traceparent_header = header.value;
-                const extracted_span_context = parseTraceparentHeader(header.value);
-                if (extracted_span_context) |span_context| {
-                    ctx_builder = ctx_builder.add(
-                        .{ .key = otel_api.trace.context_keys.remote_span_context_key.key_id, .value = otel_api.trace.context_keys.remote_span_context_key.wrapValue(span_context.asRemote()) },
-                    );
-                }
-                break;
+            } else if (std.ascii.eqlIgnoreCase(header.name, "tracestate")) {
+                tracestate_header = header.value;
+            }
+        }
+
+        if (traceparent_header) |tp_value| {
+            const extracted_span_context = parseTraceparentHeader(tp_value);
+            if (extracted_span_context) |span_context| {
+                const with_state = if (tracestate_header) |ts|
+                    span_context.withTraceState(ts)
+                else
+                    span_context;
+                ctx_builder = ctx_builder.add(
+                    .{ .key = otel_api.trace.context_keys.remote_span_context_key.key_id, .value = otel_api.trace.context_keys.remote_span_context_key.wrapValue(with_state.asRemote()) },
+                );
             }
         }
 
@@ -648,6 +659,9 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
             span.end(null);
             span.deinit();
         }
+        if (tracestate_header) |ts| {
+            span.setAttribute(.{ .key = "w3c.tracestate", .value = .{ .string = ts } });
+        }
 
         logger.emitLog(
             ctx,
@@ -658,6 +672,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
                 .{ .key = "method", .value = .{ .string = @tagName(request.head.method) } },
                 .{ .key = "path", .value = .{ .string = request.head.target } },
                 .{ .key = "has_traceparent", .value = .{ .bool = traceparent_header != null } },
+                .{ .key = "tracestate", .value = .{ .string = tracestate_header orelse "" } },
             },
             null,
         );
@@ -1044,18 +1059,23 @@ fn processHttpRequest(ctx: []otel_api.ContextKeyValue, http_context: *HttpContex
     // Parse URI
     const uri = std.Uri.parse(url) catch return;
 
-    // Create request with traceparent header
+    // Create request with traceparent and tracestate headers
+    var headers_buf: [2]std.http.Header = undefined;
+    var headers_len: usize = 0;
+    if (http_context.traceparent) |tp| {
+        headers_buf[headers_len] = .{ .name = "traceparent", .value = tp };
+        headers_len += 1;
+    }
+    if (http_context.tracestate) |ts| {
+        headers_buf[headers_len] = .{ .name = "tracestate", .value = ts };
+        headers_len += 1;
+    }
     var resp_writer = std.Io.Writer.Allocating.init(allocator);
     defer resp_writer.deinit();
     const result = http_client.fetch(.{
         .location = .{ .uri = uri },
         .method = .GET,
-        .extra_headers = if (http_context.traceparent) |tp| &[_]std.http.Header{
-            .{
-                .name = "traceparent",
-                .value = tp,
-            },
-        } else &[_]std.http.Header{},
+        .extra_headers = headers_buf[0..headers_len],
         .response_writer = &resp_writer.writer,
     }) catch return;
 

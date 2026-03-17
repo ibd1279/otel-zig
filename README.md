@@ -1,13 +1,13 @@
 # Zig Otel
 
-This is a zig implementation of the OTel API and SDK. It was build for zig 0.15.1.
+This is a zig implementation of the OTel API and SDK. It was built for zig 0.15.1.
 
 ## Quickstart
 
 ### Provider Setup
 Providers are configured using the `setupGlobalProvider` pattern with pipeline configuration. The setup is consistent across all three signals (logs, metrics, traces) and involves configuring an exporter, processor, resource, and provider implementation.
 
-The logging system supports integration with the existing `std.log`, in additional to otel API calls. This example shows both, using the OTLP exporter.
+The logging system supports integration with the existing `std.log`, in addition to otel API calls. This example shows both, using the OTLP exporter.
 
 ```zig
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -126,6 +126,36 @@ Traces is similar to metrics. This example uses the stream exporter to output to
 
 These examples show the setup of the SDK, but most usages should focus on the APIs exposed from `otel_api.getGlobalTracerProvider()` and similar methods.
 
+### Multiple Exporters
+
+Pass multiple pipeline steps in the tuple to fan out to more than one exporter. Each step registers an independent processor, so every span (or log/metric) is delivered to all exporters. This is useful for sending to OTLP in production while also streaming to console during development.
+
+```zig
+var stderr_buffer = [_]u8{0} ** 1024;
+var stderr_stream = otel_exporters.console.initStream(true, &stderr_buffer);
+
+const trace_provider = try otel_sdk.trace.setupGlobalProvider(
+    allocator,
+    .{
+        // Production exporter
+        otel_sdk.trace.BasicSpanProcessor.PipelineStep.init({})
+            .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{})),
+        // Debug exporter (runs alongside, independently)
+        otel_sdk.trace.BasicSpanProcessor.PipelineStep.init({})
+            .flowTo(otel_exporters.stream.SpanDataSink.PipelineStep.init(.{
+                .writer = &stderr_stream.interface,
+                .flush_after_each = true,
+            })),
+    },
+);
+defer {
+    trace_provider.deinit();
+    trace_provider.destroy();
+}
+```
+
+The same pattern applies to logs (two `SimpleLogRecordProcessor` steps) and metrics (two reader steps).
+
 ## The API
 
 The API part provides methods for getting and setting Global Providers and the necessary interfaces for using them.
@@ -179,7 +209,6 @@ The flow is: Provider → Processor/Reader → Exporter, with each component bei
 
 ## Limitations
 
-- **`trace_state` isn't really handled** -- while the type has room for it, the memory implications of using the trace state have not been worked out; it will leak.
-- **No real integration** -- While it is relatively trival to do some context propagation, no integration or simplication with the default zig sdk has been done yet. But an [example is available](examples/multithreaded_http_telemetry.zig) that shows what it would look like right now.
-- **A couple of things diverge from the specification** --  That is taken from [a thread from nodejs about OTel](https://github.com/nodejs/node/issues/57992#issuecomment-2844248550). In summary, the spec is to make it easy to rationalize, but it is not the only way to implement the model.
+- **No std.http integration** -- W3C trace context propagation (traceparent/tracestate) is fully implemented, but there is no automatic middleware for injecting/extracting headers from `std.http` requests. See [`examples/multithreaded_http_telemetry.zig`](examples/multithreaded_http_telemetry.zig) for a manual example.
+- **A couple of things diverge from the specification** -- That is taken from [a thread from nodejs about OTel](https://github.com/nodejs/node/issues/57992#issuecomment-2844248550). In summary, the spec is to make it easy to rationalize, but it is not the only way to implement the model.
 - **Depends on protobuf** -- This sdk depends on [Arwalk's zig-protobuf](https://github.com/Arwalk/zig-protobuf/) for the exporter. Luckily they've recently done a bunch of zig 0.15 upgrades as well.

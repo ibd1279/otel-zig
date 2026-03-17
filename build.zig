@@ -51,7 +51,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const gen_proto = b.step("gen-proto", "generates zig files for OTLP.");
-    const protoc_step = @import("protobuf").RunProtocStep.create(b, protobuf_dep.builder, target, .{
+    const protoc_step = @import("protobuf").RunProtocStep.create(protobuf_dep.builder, target, .{
         // out directory for the generated zig files
         .destination_directory = b.path("src/exporters/otlp/proto"),
         .source_files = &.{

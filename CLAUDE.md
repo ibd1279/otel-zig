@@ -15,7 +15,7 @@ The code targets zig version 0.15.1. This often means you should ask the human w
 - `zig build test-exporters` - Run exporter tests
 - `zig build --verbose example-multithreaded-http -- console 20 1.0` - run a comprehensive test for 20 seconds outputting to the console.
 - `zig build --verbose example-multithreaded-http -- otlp 20 0.5` - run a comprehensive test for 20 seconds using the otlp exporter and sampling 50%.
-- `zig build -l` - to lest all the build targets and to find one not on this list.
+- `zig build -l` - to list all the build targets and to find one not on this list.
 
 ## Running individual files
 
@@ -47,46 +47,23 @@ You can normally find the path to protobuf under the `.cache` directory.
 
 This is a Zig implementation of the OpenTelemetry API and SDK following the official OpenTelemetry specification. The codebase is structured with clear separation between API interfaces and SDK implementations. While this implementation tries to follow the specification closely, [where it makes more zig sense, we diverge](https://github.com/nodejs/node/issues/57992#issuecomment-2844248550).
 
-### Module Structure
-
-The library is organized into four main modules:
-
-1. **`otel-api`** - Stable API interfaces and no-op implementations (`src/api/`)
-2. **`otel-sdk`** - Concrete SDK implementations (`src/sdk/`)
-3. **`otel-exporters`** - Telemetry data exporters (`src/exporters/`)
-4. **`otel-semconv`** - Semantic conventions (`src/semconv/`)
-
-A convenience `otel` module re-exports everything for simple use cases.
-
-### Provider→Processor→Exporter Flow
-
-The SDK follows the classic OpenTelemetry pattern:
-
-```
-Provider (creates loggers/meters/tracers)
-    ↓
-Processor/Reader (processes telemetry records)
-    ↓
-Exporter (sends data to backends)
-```
-
-This pattern is consistent across logs, metrics, and traces (when implemented).
+See README.md for module structure and the Provider→Processor→Exporter flow overview.
 
 ### Bridge Pattern Architecture
 
 The codebase uses a bridge pattern to separate API from SDK:
 
 - **API Layer**: Defines interfaces using tagged unions (`Logger`, `LoggerProvider`, etc.)
-- **Bridge Types**: Enable SDK implementations to plug into API interfaces. These are provided in the API layer and use template meta progamming (`LoggerProviderBridge`)
+- **Bridge Types**: Enable SDK implementations to plug into API interfaces. These are provided in the API layer and use template metaprogramming (`LoggerProviderBridge`)
 - **SDK Layer**: Provides concrete implementations (`sdk.Logger`, `sdk.LoggerProvider`, `sdk.BasicTracerProvider`, etc.)
 
 ### Memory Management
 
 All API types are **non-owning** - they hold references, not owned data. Callers are responsible for data lifetime management. The SDK tries to avoid creating new variants unless required. Usually a cloning method added to the API is sufficient (e.g. `AttributeKeyValue` has `initOwned()`, `initOwnedSlice`, `deinitOwned`, and `deinitOwnedSlice`). Types and collections are usually immutable. A builder should be used when cases of mutability are required (e.g. `AttributeBuilder`). In many cases, you can pass an empty, non-owning slice to things via `&.{}`.
 
-SDK types have more flexibilty in terms of owning the memory and mutability.
+SDK types have more flexibility in terms of owning the memory and mutability.
 
-Exporters and Processors should copy and own memory when they are buffering or otherwise asyncronously using data.
+Exporters and Processors should copy and own memory when they are buffering or otherwise asynchronously using data.
 
 ## Key Patterns
 
@@ -159,58 +136,12 @@ pub const PipelineStep = PipelineStepInstructions(
 ### Global Provider Registry
 Thread-safe global provider management through `provider_registry.zig` with mutex-protected storage.
 
-#### Provider Setup
-Providers are configured using the `setupGlobalProvider` pattern with pipeline configuration. The setup is consistent across all three signals (logs, metrics, traces) and involves configuring an exporter, processor, resource, and provider implementation:
-
-```zig
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-defer _ = gpa.deinit();
-const allocator = gpa.allocator();
-
-// Logs setup
-const log_provider = try otel_sdk.logs.setupGlobalProvider(
-    allocator,
-    .{otel_sdk.logs.SimpleLogRecordProcessor.PipelineStep.init({})
-        .flowTo(otel_exporters.console.ConsoleLogExporter.PipelineStep.init(.{}))},
-);
-defer {
-    log_provider.deinit();
-    log_provider.destroy();
-}
-
-// Metrics setup
-const metric_provider = try otel_sdk.metrics.setupGlobalProvider(
-    allocator,
-    .{otel_sdk.metrics.BasicMetricProcessor.PipelineStep.init({})
-        .flowTo(otel_exporters.otlp.OtlpMetricExporter.PipelineStep.init(.{}))},
-);
-defer {
-    metric_provider.deinit();
-    metric_provider.destroy();
-}
-
-// Traces setup
-const trace_provider = try otel_sdk.trace.setupGlobalProvider(
-    allocator,
-    .{otel_sdk.trace.BasicSpanProcessor.PipelineStep.init({})
-        .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{}))},
-);
-defer {
-    trace_provider.deinit();
-    trace_provider.destroy();
-}
-
-// Get providers from global registry (now backed by SDK)
-const scope = try otel_api.InstrumentationScope.initSimple("my.app", "1.0.0");
-var logger = try otel_api.getGlobalLoggerProvider().getLoggerWithScope(scope);
-var meter = try otel_api.getGlobalMeterProvider().getMeterWithScope(scope);
-var tracer = try otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
-```
-
-This pattern registers providers globally, making them available through the API's global registry functions. The same setupGlobalProvider pattern is used consistently across logs, metrics, and traces.
+`setupGlobalProvider` takes an `anytype` tuple — each item becomes an independent `registerProcessor`/`registerReader` call, so multiple items fan out to multiple exporters. See README.md for usage examples.
 
 ### Span Lifecycle
 Two-phase pattern where `.end()` marks span completion and `.deinit()` handles memory cleanup, following Zig RAII patterns. Spans remain queryable after ending but become non-recording.
+
+`Span.deinit()` frees the span context (including `trace_state`) via `bridge.ctx.deinit(bridge.allocator)` for recording spans. Dropped (noop) spans never allocate `trace_state`. `SpanData.initOwned`/`deinitOwned` also own their copy of `ctx.trace_state` and `parent_ctx.trace_state` for processors that buffer asynchronously.
 
 ## Current State
 
@@ -220,7 +151,7 @@ Semantic conventions has not been started.
 
 Exporters are complete for OTLP and *Io.Writer, with full PipelineStep integration and batch processing support.
 
-The examples serve as comprehensive integration tests and demonstrate proper usage patterns for all three signals. `examples/multithreaded_http_telemetry.zig` is the most comprehensive in that it test all the signals and most of the SDK functionality, and exporters.
+The examples serve as comprehensive integration tests and demonstrate proper usage patterns for all three signals. `examples/multithreaded_http_telemetry.zig` is the most comprehensive in that it exercises all three signals, W3C trace context propagation (including `tracestate`), and most of the SDK and exporter functionality.
 
 ## Testing Utilities
 

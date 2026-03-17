@@ -24,8 +24,11 @@ pub const Span = union(enum) {
     /// Clean up span resources
     pub inline fn deinit(self: *const Span) void {
         switch (self.*) {
-            .noop => |_| {},
-            .bridge => |bridge| bridge.deinitFn(bridge.span_ptr),
+            .noop => {},
+            .bridge => |bridge| {
+                bridge.ctx.deinit(bridge.allocator);
+                bridge.deinitFn(bridge.span_ptr);
+            },
         }
     }
 

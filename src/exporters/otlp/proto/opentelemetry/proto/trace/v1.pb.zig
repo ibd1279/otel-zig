@@ -9,6 +9,20 @@ const opentelemetry_proto_common_v1 = @import("../common/v1.pb.zig");
 /// import package opentelemetry.proto.resource.v1
 const opentelemetry_proto_resource_v1 = @import("../resource/v1.pb.zig");
 
+/// SpanFlags represents constants used to interpret the
+/// Span.flags field, which is protobuf 'fixed32' type and is to
+/// be used as bit-fields. Each non-zero value defined in this enum is
+/// a bit-mask.  To extract the bit-field, for example, use an
+/// expression like:
+///
+/// (span.flags & SPAN_FLAGS_TRACE_FLAGS_MASK)
+///
+/// See https://www.w3.org/TR/trace-context-2/#trace-flags for the flag definitions.
+///
+/// Note that Span flags were introduced in version 1.1 of the
+/// OpenTelemetry protocol.  Older Span producers do not set this
+/// field, consequently consumers should not rely on the absence of a
+/// particular flag bit to indicate the presence of a particular feature.
 pub const SpanFlags = enum(i32) {
     SPAN_FLAGS_DO_NOT_USE = 0,
     SPAN_FLAGS_TRACE_FLAGS_MASK = 255,
@@ -17,6 +31,16 @@ pub const SpanFlags = enum(i32) {
     _,
 };
 
+/// TracesData represents the traces data that can be stored in a persistent storage,
+/// OR can be embedded by other protocols that transfer OTLP traces data but do
+/// not implement the OTLP protocol.
+///
+/// The main difference between this message and collector protocol is that
+/// in this message there will not be any "control" or "metadata" specific to
+/// OTLP protocol.
+///
+/// When new fields are added into this message, the OTLP request MUST be updated
+/// as well.
 pub const TracesData = struct {
     resource_spans: std.ArrayListUnmanaged(ResourceSpans) = .empty,
 
@@ -66,9 +90,10 @@ pub const TracesData = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -80,14 +105,9 @@ pub const TracesData = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// A collection of ScopeSpans from a Resource.
 pub const ResourceSpans = struct {
     resource: ?opentelemetry_proto_resource_v1.Resource = null,
     scope_spans: std.ArrayListUnmanaged(ScopeSpans) = .empty,
@@ -141,9 +161,10 @@ pub const ResourceSpans = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -155,14 +176,9 @@ pub const ResourceSpans = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// A collection of Spans produced by an InstrumentationScope.
 pub const ScopeSpans = struct {
     scope: ?opentelemetry_proto_common_v1.InstrumentationScope = null,
     spans: std.ArrayListUnmanaged(Span) = .empty,
@@ -216,9 +232,10 @@ pub const ScopeSpans = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -230,14 +247,11 @@ pub const ScopeSpans = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// A Span represents a single operation performed by a single component of the system.
+///
+/// The next available field id is 17.
 pub const Span = struct {
     trace_id: []const u8 = &.{},
     span_id: []const u8 = &.{},
@@ -275,6 +289,8 @@ pub const Span = struct {
         .status = fd(15, .submessage),
     };
 
+    /// SpanKind is the type of span. Can be used to specify additional relationships between spans
+    /// in addition to a parent/child relationship.
     pub const SpanKind = enum(i32) {
         SPAN_KIND_UNSPECIFIED = 0,
         SPAN_KIND_INTERNAL = 1,
@@ -285,6 +301,8 @@ pub const Span = struct {
         _,
     };
 
+    /// Event is a time-stamped annotation of the span, consisting of user-supplied
+    /// text description and key-value pairs.
     pub const Event = struct {
         time_unix_nano: u64 = 0,
         name: []const u8 = &.{},
@@ -340,9 +358,10 @@ pub const Span = struct {
         pub fn jsonEncode(
             self: @This(),
             options: std.json.Stringify.Options,
+            pb_options: protobuf.json.Options,
             allocator: std.mem.Allocator,
         ) ![]const u8 {
-            return protobuf.json.encode(self, options, allocator);
+            return protobuf.json.encode(self, options, pb_options, allocator);
         }
 
         /// This method is used by std.json
@@ -354,14 +373,12 @@ pub const Span = struct {
         ) !@This() {
             return protobuf.json.parse(@This(), allocator, source, options);
         }
-
-        /// This method is used by std.json
-        /// internally for serialization. DO NOT RENAME!
-        pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-            return protobuf.json.stringify(@This(), self, jws);
-        }
     };
 
+    /// A pointer from the current span to another span in the same trace or in a
+    /// different trace. For example, this can be used in batching operations,
+    /// where a single batch handler processes multiple requests from different
+    /// traces or when the handler receives a request from a different project.
     pub const Link = struct {
         trace_id: []const u8 = &.{},
         span_id: []const u8 = &.{},
@@ -421,9 +438,10 @@ pub const Span = struct {
         pub fn jsonEncode(
             self: @This(),
             options: std.json.Stringify.Options,
+            pb_options: protobuf.json.Options,
             allocator: std.mem.Allocator,
         ) ![]const u8 {
-            return protobuf.json.encode(self, options, allocator);
+            return protobuf.json.encode(self, options, pb_options, allocator);
         }
 
         /// This method is used by std.json
@@ -434,12 +452,6 @@ pub const Span = struct {
             options: std.json.ParseOptions,
         ) !@This() {
             return protobuf.json.parse(@This(), allocator, source, options);
-        }
-
-        /// This method is used by std.json
-        /// internally for serialization. DO NOT RENAME!
-        pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-            return protobuf.json.stringify(@This(), self, jws);
         }
     };
 
@@ -485,9 +497,10 @@ pub const Span = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -499,14 +512,10 @@ pub const Span = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// The Status type defines a logical error model that is suitable for different
+/// programming environments, including REST APIs and RPC APIs.
 pub const Status = struct {
     message: []const u8 = &.{},
     code: Status.StatusCode = @enumFromInt(0),
@@ -516,6 +525,8 @@ pub const Status = struct {
         .code = fd(3, .@"enum"),
     };
 
+    /// For the semantics of status codes see
+    /// https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/api.md#set-status
     pub const StatusCode = enum(i32) {
         STATUS_CODE_UNSET = 0,
         STATUS_CODE_OK = 1,
@@ -565,9 +576,10 @@ pub const Status = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -578,11 +590,5 @@ pub const Status = struct {
         options: std.json.ParseOptions,
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
-    }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
     }
 };

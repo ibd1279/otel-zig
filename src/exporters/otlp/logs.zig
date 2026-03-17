@@ -197,7 +197,7 @@ pub const OtlpLogExporter = struct {
         var logs_data = try convertToProtoLogsData(allocator, records, resource);
 
         // Serialize to JSON
-        return @constCast(try logs_data.jsonEncode(.{}, allocator));
+        return @constCast(try logs_data.jsonEncode(.{}, .{}, allocator));
     }
 
     fn convertToProtobufFormat(self: *OtlpLogExporter, allocator: std.mem.Allocator, records: []const LogRecord, resource: Resource) ![]u8 {

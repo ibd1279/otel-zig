@@ -9,6 +9,7 @@ const opentelemetry_proto_common_v1 = @import("../common/v1.pb.zig");
 /// import package opentelemetry.proto.resource.v1
 const opentelemetry_proto_resource_v1 = @import("../resource/v1.pb.zig");
 
+/// Possible values for LogRecord.SeverityNumber.
 pub const SeverityNumber = enum(i32) {
     SEVERITY_NUMBER_UNSPECIFIED = 0,
     SEVERITY_NUMBER_TRACE = 1,
@@ -38,12 +39,29 @@ pub const SeverityNumber = enum(i32) {
     _,
 };
 
+/// LogRecordFlags represents constants used to interpret the
+/// LogRecord.flags field, which is protobuf 'fixed32' type and is to
+/// be used as bit-fields. Each non-zero value defined in this enum is
+/// a bit-mask.  To extract the bit-field, for example, use an
+/// expression like:
+///
+/// (logRecord.flags & LOG_RECORD_FLAGS_TRACE_FLAGS_MASK)
 pub const LogRecordFlags = enum(i32) {
     LOG_RECORD_FLAGS_DO_NOT_USE = 0,
     LOG_RECORD_FLAGS_TRACE_FLAGS_MASK = 255,
     _,
 };
 
+/// LogsData represents the logs data that can be stored in a persistent storage,
+/// OR can be embedded by other protocols that transfer OTLP logs data but do not
+/// implement the OTLP protocol.
+///
+/// The main difference between this message and collector protocol is that
+/// in this message there will not be any "control" or "metadata" specific to
+/// OTLP protocol.
+///
+/// When new fields are added into this message, the OTLP request MUST be updated
+/// as well.
 pub const LogsData = struct {
     resource_logs: std.ArrayListUnmanaged(ResourceLogs) = .empty,
 
@@ -93,9 +111,10 @@ pub const LogsData = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -107,14 +126,9 @@ pub const LogsData = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// A collection of ScopeLogs from a Resource.
 pub const ResourceLogs = struct {
     resource: ?opentelemetry_proto_resource_v1.Resource = null,
     scope_logs: std.ArrayListUnmanaged(ScopeLogs) = .empty,
@@ -168,9 +182,10 @@ pub const ResourceLogs = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -182,14 +197,9 @@ pub const ResourceLogs = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// A collection of Logs produced by a Scope.
 pub const ScopeLogs = struct {
     scope: ?opentelemetry_proto_common_v1.InstrumentationScope = null,
     log_records: std.ArrayListUnmanaged(LogRecord) = .empty,
@@ -243,9 +253,10 @@ pub const ScopeLogs = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -257,14 +268,10 @@ pub const ScopeLogs = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// A log record according to OpenTelemetry Log Data Model:
+/// https://github.com/open-telemetry/oteps/blob/main/text/logs/0097-log-data-model.md
 pub const LogRecord = struct {
     time_unix_nano: u64 = 0,
     observed_time_unix_nano: u64 = 0,
@@ -334,9 +341,10 @@ pub const LogRecord = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -347,11 +355,5 @@ pub const LogRecord = struct {
         options: std.json.ParseOptions,
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
-    }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
     }
 };

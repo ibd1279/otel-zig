@@ -2,6 +2,7 @@
 //! main field structure and the VTable for the more complex
 //! operations.
 
+const std = @import("std");
 const api = struct {
     const AttributeKeyValue = @import("../common/attributes.zig").AttributeKeyValue;
     const trace = struct {
@@ -17,6 +18,7 @@ kind: api.trace.Span.Kind,
 start_ns: i64,
 end_ns: ?i64,
 is_recording: bool,
+allocator: std.mem.Allocator,
 
 span_ptr: *anyopaque,
 updateNameFn: *const fn (span_ptr: *anyopaque, new_name: []const u8) void,
@@ -38,6 +40,7 @@ pub fn init(
     start_ns: i64,
     end_ns: ?i64,
     is_recording: bool,
+    allocator: std.mem.Allocator,
 ) @This() {
     const T = @TypeOf(ptr);
     const ptr_info = @typeInfo(T);
@@ -92,6 +95,7 @@ pub fn init(
         .start_ns = start_ns,
         .end_ns = end_ns,
         .is_recording = is_recording,
+        .allocator = allocator,
 
         .span_ptr = ptr,
         .updateNameFn = VTable.updateName,

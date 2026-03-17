@@ -35,7 +35,13 @@ pub const ContextValue = union(enum) {
             .float => |float| .{ .float = float },
             .string => |string| .{ .string = try allocator.dupe(u8, string) },
             .baggage => |baggage| .{ .baggage = try api.baggage.BaggageKeyValue.initOwnedSlice(allocator, baggage) },
-            .span_context => |span_context| .{ .span_context = span_context },
+            .span_context => |span_context| .{ .span_context = .{
+                .trace_id = span_context.trace_id,
+                .span_id = span_context.span_id,
+                .trace_flags = span_context.trace_flags,
+                .is_remote = span_context.is_remote,
+                .trace_state = if (span_context.trace_state) |ts| try allocator.dupe(u8, ts) else null,
+            } },
             .byte => |byte| .{ .byte = byte },
         };
     }
@@ -44,7 +50,7 @@ pub const ContextValue = union(enum) {
         switch (self) {
             .string => |string| allocator.free(string),
             .baggage => |baggage| api.baggage.BaggageKeyValue.deinitOwnedSlice(allocator, baggage),
-            .span_context => {},
+            .span_context => |span_context| span_context.deinit(allocator),
             else => {},
         }
     }

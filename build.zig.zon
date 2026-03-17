@@ -37,8 +37,8 @@
     // internet connectivity.
     .dependencies = .{
         .protobuf = .{
-            .url = "git+https://github.com/Arwalk/zig-protobuf?ref=master#472d7dc3d813d40d07bacee752e85349ce2dbc9d",
-            .hash = "protobuf-2.0.0-0e82amefKACMfweRzonYrnmyvSfG3S_izYrBmVHWabyX",
+            .url = "git+https://github.com/Arwalk/zig-protobuf?ref=v4.0.0#622e9e84f6df66758718b1196e1ccd6dd45a8930",
+            .hash = "protobuf-3.0.0-0e82avQuKADcHgDzDixSMGN22hzGEgwFE0tEJUWnWu5Q",
         },
     },
     .paths = .{

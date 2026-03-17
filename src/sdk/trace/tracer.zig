@@ -105,23 +105,28 @@ pub const StandardTracer = struct {
             .record_and_sample => otel_api.trace.Span.Context.SAMPLED_FLAG,
         };
 
-        // Create span context
-        const span_context = otel_api.trace.Span.Context{
-            .trace_id = trace_id,
-            .span_id = span_id,
-            .trace_flags = trace_flags,
-            .trace_state = if (sampling_result.trace_state) |ts| try self.provider.allocator.dupe(u8, ts) else null,
-            .is_remote = false,
-        };
-        errdefer span_context.deinit(self.provider.allocator);
-
         // Handle sampling decision
         switch (sampling_result.decision) {
             .drop => {
-                // Return noop span for dropped spans
-                return otel_api.trace.Span{ .noop = span_context };
+                // Dropped spans are non-recording; trace_state is unused
+                return otel_api.trace.Span{ .noop = .{
+                    .trace_id = trace_id,
+                    .span_id = span_id,
+                    .trace_flags = trace_flags,
+                    .trace_state = null,
+                    .is_remote = false,
+                } };
             },
             .record_only, .record_and_sample => {
+                const span_context = otel_api.trace.Span.Context{
+                    .trace_id = trace_id,
+                    .span_id = span_id,
+                    .trace_flags = trace_flags,
+                    .trace_state = if (sampling_result.trace_state) |ts| try self.provider.allocator.dupe(u8, ts) else null,
+                    .is_remote = false,
+                };
+                errdefer span_context.deinit(self.provider.allocator);
+
                 const recording = try self.provider.allocator.create(sdk.trace.RecordingSpan);
                 recording.* = try sdk.trace.RecordingSpan.init(self, name);
 
@@ -143,6 +148,7 @@ pub const StandardTracer = struct {
                     start_time,
                     null,
                     true,
+                    self.provider.allocator,
                 );
                 var span = otel_api.trace.Span{ .bridge = bridge };
                 span.setStatus(opts.status);

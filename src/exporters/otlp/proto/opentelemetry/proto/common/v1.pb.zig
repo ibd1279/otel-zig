@@ -5,6 +5,9 @@ const std = @import("std");
 const protobuf = @import("protobuf");
 const fd = protobuf.fd;
 
+/// Represents any type of attribute value. AnyValue may contain a
+/// primitive value such as a string or integer or it may contain an arbitrary nested
+/// object containing arrays, key-value lists and primitives.
 pub const AnyValue = struct {
     value: ?value_union = null,
 
@@ -16,6 +19,7 @@ pub const AnyValue = struct {
         array_value,
         kvlist_value,
         bytes_value,
+        string_value_strindex,
     };
     pub const value_union = union(_value_case) {
         string_value: []const u8,
@@ -25,6 +29,7 @@ pub const AnyValue = struct {
         array_value: ArrayValue,
         kvlist_value: KeyValueList,
         bytes_value: []const u8,
+        string_value_strindex: i32,
         pub const _desc_table = .{
             .string_value = fd(1, .{ .scalar = .string }),
             .bool_value = fd(2, .{ .scalar = .bool }),
@@ -33,6 +38,7 @@ pub const AnyValue = struct {
             .array_value = fd(5, .submessage),
             .kvlist_value = fd(6, .submessage),
             .bytes_value = fd(7, .{ .scalar = .bytes }),
+            .string_value_strindex = fd(8, .{ .scalar = .int32 }),
         };
     };
 
@@ -82,9 +88,10 @@ pub const AnyValue = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -96,14 +103,10 @@ pub const AnyValue = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// ArrayValue is a list of AnyValue messages. We need ArrayValue as a message
+/// since oneof in AnyValue does not allow repeated fields.
 pub const ArrayValue = struct {
     values: std.ArrayListUnmanaged(AnyValue) = .empty,
 
@@ -153,9 +156,10 @@ pub const ArrayValue = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -167,14 +171,13 @@ pub const ArrayValue = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// KeyValueList is a list of KeyValue messages. We need KeyValueList as a message
+/// since `oneof` in AnyValue does not allow repeated fields. Everywhere else where we need
+/// a list of KeyValue messages (e.g. in Span) we use `repeated KeyValue` directly to
+/// avoid unnecessary extra wrapping (which slows down the protocol). The 2 approaches
+/// are semantically equivalent.
 pub const KeyValueList = struct {
     values: std.ArrayListUnmanaged(KeyValue) = .empty,
 
@@ -224,9 +227,10 @@ pub const KeyValueList = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -238,21 +242,19 @@ pub const KeyValueList = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// Represents a key-value pair that is used to store Span attributes, Link
+/// attributes, etc.
 pub const KeyValue = struct {
     key: []const u8 = &.{},
     value: ?AnyValue = null,
+    key_strindex: i32 = 0,
 
     pub const _desc_table = .{
         .key = fd(1, .{ .scalar = .string }),
         .value = fd(2, .submessage),
+        .key_strindex = fd(3, .{ .scalar = .int32 }),
     };
 
     /// Encodes the message to the writer
@@ -297,9 +299,10 @@ pub const KeyValue = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -311,14 +314,10 @@ pub const KeyValue = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// InstrumentationScope is a message representing the instrumentation scope information
+/// such as the fully qualified name and version.
 pub const InstrumentationScope = struct {
     name: []const u8 = &.{},
     version: []const u8 = &.{},
@@ -374,9 +373,10 @@ pub const InstrumentationScope = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -388,14 +388,12 @@ pub const InstrumentationScope = struct {
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
     }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
-    }
 };
 
+/// A reference to an Entity.
+/// Entity represents an object of interest associated with produced telemetry: e.g spans, metrics, profiles, or logs.
+///
+/// Status: [Development]
 pub const EntityRef = struct {
     schema_url: []const u8 = &.{},
     type: []const u8 = &.{},
@@ -451,9 +449,10 @@ pub const EntityRef = struct {
     pub fn jsonEncode(
         self: @This(),
         options: std.json.Stringify.Options,
+        pb_options: protobuf.json.Options,
         allocator: std.mem.Allocator,
     ) ![]const u8 {
-        return protobuf.json.encode(self, options, allocator);
+        return protobuf.json.encode(self, options, pb_options, allocator);
     }
 
     /// This method is used by std.json
@@ -464,11 +463,5 @@ pub const EntityRef = struct {
         options: std.json.ParseOptions,
     ) !@This() {
         return protobuf.json.parse(@This(), allocator, source, options);
-    }
-
-    /// This method is used by std.json
-    /// internally for serialization. DO NOT RENAME!
-    pub fn jsonStringify(self: *const @This(), jws: anytype) !void {
-        return protobuf.json.stringify(@This(), self, jws);
     }
 };

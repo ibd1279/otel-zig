@@ -42,7 +42,6 @@ pub const SpanData = struct {
     links: []api.trace.Span.Link,
 
     pub fn initOwned(allocator: std.mem.Allocator, unowned: SpanData) !SpanData {
-        // TODO inspect what we need to do with the SpanContext fields.
         const name = try allocator.dupe(u8, unowned.name);
         errdefer allocator.free(name);
 
@@ -99,10 +98,24 @@ pub const SpanData = struct {
         }
         errdefer for (links) |link| api.AttributeKeyValue.deinitOwnedSlice(allocator, link.attributes);
 
+        const ctx = blk: {
+            var c = unowned.ctx;
+            c.trace_state = if (unowned.ctx.trace_state) |ts| try allocator.dupe(u8, ts) else null;
+            break :blk c;
+        };
+        errdefer ctx.deinit(allocator);
+
+        const parent_ctx = if (unowned.parent_ctx) |pc| blk: {
+            var c = pc;
+            c.trace_state = if (pc.trace_state) |ts| try allocator.dupe(u8, ts) else null;
+            break :blk c;
+        } else null;
+        errdefer if (parent_ctx) |pc| pc.deinit(allocator);
+
         return SpanData{
             .scope = unowned.scope,
-            .ctx = unowned.ctx,
-            .parent_ctx = unowned.parent_ctx,
+            .ctx = ctx,
+            .parent_ctx = parent_ctx,
             .name = name,
             .kind = unowned.kind,
             .status = status,
@@ -115,7 +128,8 @@ pub const SpanData = struct {
     }
 
     pub fn deinitOwned(self: SpanData, allocator: std.mem.Allocator) void {
-        // TODO inspect what we need to do with SpanContext fields.
+        self.ctx.deinit(allocator);
+        if (self.parent_ctx) |pc| pc.deinit(allocator);
         allocator.free(self.name);
         if (self.status.description) |desc| allocator.free(desc);
         api.AttributeKeyValue.deinitOwnedSlice(allocator, self.attributes);
