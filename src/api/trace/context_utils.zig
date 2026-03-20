@@ -19,10 +19,18 @@ const api = struct {
     };
 };
 const context_keys = @import("context_keys.zig");
+const implicit = @import("../context/implicit.zig");
 
 /// Get the active span context from a context, if present
 pub fn getActiveSpanContext(ctx: []const api.ContextKeyValue) ?api.trace.Span.Context {
     return extractContextValue(ctx, context_keys.active_span_context_key);
+}
+
+/// Returns the active span from the implicit thread-local context.
+/// Returns a noop span wrapping Span.Context.invalid if no span is active.
+pub fn getActiveSpan() api.trace.Span {
+    const span_ctx = getActiveSpanContext(implicit.getCurrent());
+    return .{ .noop = span_ctx orelse api.trace.Span.Context.invalid };
 }
 
 /// Get the remote span context from a context, if present
@@ -512,4 +520,40 @@ test "startChildSpan creates proper child context" {
 
     // Child should have different span ID
     try testing.expect(!std.mem.eql(u8, &root_span.?.span_id.bytes, &child_span.?.span_id.bytes));
+}
+
+test "getActiveSpan returns invalid noop when no context attached" {
+    const testing = std.testing;
+    // Ensure no implicit context is set (tests run serially, threadlocal starts at &.{})
+    const prior = implicit.attach(&.{});
+    defer implicit.detach(prior);
+
+    const span = getActiveSpan();
+    try testing.expect(!span.getSpanContext().isValid());
+    try testing.expect(!span.isRecording());
+}
+
+test "getActiveSpan returns valid noop after attach" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const span_ctx = api.trace.Span.Context{
+        .trace_id = api.common.TraceId.fromBytes([_]u8{0x01} ** 16),
+        .span_id = api.common.SpanId.fromBytes([_]u8{0x02} ** 8),
+        .trace_flags = api.trace.Span.Context.SAMPLED_FLAG,
+        .trace_state = null,
+        .is_remote = false,
+    };
+
+    const ctx = try withActiveSpanContext(allocator, &.{}, span_ctx);
+    defer api.ContextKeyValue.deinitOwnedSlice(allocator, ctx);
+
+    const token = implicit.attach(ctx);
+    defer implicit.detach(token);
+
+    const active = getActiveSpan();
+    try testing.expect(active.getSpanContext().isValid());
+    try testing.expect(!active.isRecording()); // noop span, not a recording bridge
+    try testing.expectEqualSlices(u8, &span_ctx.trace_id.bytes, &active.getSpanContext().trace_id.bytes);
+    try testing.expectEqualSlices(u8, &span_ctx.span_id.bytes, &active.getSpanContext().span_id.bytes);
 }

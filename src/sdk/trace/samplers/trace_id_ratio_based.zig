@@ -86,6 +86,32 @@ pub const TraceIdRatioBasedSampler = struct {
 
     /// Make sampling decision based on trace ID hash
     pub fn shouldSample(self: *const TraceIdRatioBasedSampler, params: otel_api.trace.Sampler.Params) otel_api.trace.Sampler.Result {
+        // Warn when used as a child sampler — only reliable as a root sampler inside ParentBased.
+        if (otel_api.trace.trace_context.getSpanContext(params.context) != null) {
+            // Check whether parent is using ProbabilitySampler (th or rv in ot= tracestate)
+            const using_probability = blk: {
+                if (params.parent_ctx) |pctx| if (pctx.trace_state) |ts| {
+                    var buf: [otel_api.trace.StateKeyValue.max_pairs]otel_api.trace.StateKeyValue = undefined;
+                    const state = otel_api.trace.StateKeyValue.fromString(ts, &buf);
+                    if (otel_api.trace.StateKeyValue.scanSlice(state, "ot")) |ot| {
+                        const ot_state = otel_api.trace.OtState.fromString(ot.value orelse "") catch otel_api.trace.OtState{};
+                        if (ot_state.th != null or ot_state.rv != null) break :blk true;
+                    }
+                };
+                break :blk false;
+            };
+            const msg = if (using_probability)
+                "TraceIdRatioBased is operating as a child sampler and a parent is using ProbabilitySampler. Use ProbabilitySampler instead."
+            else
+                "TraceIdRatioBased is operating as a child sampler; behavior is subject to change. Use ParentBased(root: TraceIdRatioBased) instead.";
+            otel_api.common.reportError(.{
+                .component = .tracer,
+                .operation = "shouldSample",
+                .error_type = .configuration,
+                .message = msg,
+            });
+        }
+
         const random = blk: {
             var random = std.mem.bytesToValue(u56, params.trace_id.bytes[otel_api.common.TraceId.length - 7 ..]);
             if (params.parent_ctx) |parent_ctx| if (parent_ctx.trace_state) |trace_state| {
@@ -257,4 +283,38 @@ test "TraceIdRatioBasedSampler - description" {
     const sampler = TraceIdRatioBasedSampler.init(0.5, 14);
     const description = sampler.getDescription();
     try testing.expectEqualStrings("TraceIdRatioBased{0.5}", description);
+}
+
+test "TraceIdRatioBasedSampler - warns when used as child sampler" {
+    const allocator = testing.allocator;
+
+    var mock = otel_api.common.MockErrorHandler.init(allocator);
+    defer mock.deinit();
+    otel_api.common.setMockErrorHandler(&mock);
+    defer otel_api.common.clearMockErrorHandler();
+
+    const sampler = TraceIdRatioBasedSampler.init(1.0, 14);
+
+    const parent_ctx = otel_api.trace.Span.Context{
+        .trace_id = otel_api.common.TraceId.fromBytes([_]u8{1} ** 16),
+        .span_id = otel_api.common.SpanId.fromBytes([_]u8{2} ** 8),
+        .trace_flags = otel_api.trace.Span.Context.SAMPLED_FLAG,
+        .trace_state = null,
+        .is_remote = false,
+    };
+    const ctx = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, parent_ctx);
+    defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, ctx);
+
+    _ = sampler.shouldSample(.{
+        .allocator = allocator,
+        .context = ctx,
+        .trace_id = otel_api.common.TraceId.fromBytes([_]u8{1} ** 16),
+        .span_name = "child",
+        .span_kind = .internal,
+    });
+
+    try testing.expectEqual(@as(usize, 1), mock.errorCount());
+    try testing.expect(mock.hasErrorWithMessage(
+        "TraceIdRatioBased is operating as a child sampler; behavior is subject to change. Use ParentBased(root: TraceIdRatioBased) instead.",
+    ));
 }

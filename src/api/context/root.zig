@@ -20,6 +20,9 @@ pub const ContextValue = @import("context_key.zig").ContextValue;
 pub const TextMapCarrier = @import("propagation.zig").TextMapCarrier;
 pub const TextMapPropagator = @import("propagation.zig").TextMapPropagator;
 
+// Implicit thread-local context propagation
+pub const implicit = @import("implicit.zig");
+
 test {
     std.testing.refAllDecls(@This());
 }

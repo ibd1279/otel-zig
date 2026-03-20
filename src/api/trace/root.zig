@@ -26,6 +26,7 @@ pub const OtState = @import("trace_state.zig").OtState;
 pub const context_keys = @import("context_keys.zig");
 pub const W3cPropagator = @import("w3c_propagator.zig").W3cPropagator;
 pub const createW3cPropagator = @import("w3c_propagator.zig").createW3cPropagator;
+pub const spanContextFromHeaders = @import("w3c_propagator.zig").spanContextFromHeaders;
 
 // Spans
 const span_zig = @import("span.zig");
@@ -36,6 +37,7 @@ pub const Sampler = sampling_config.Sampler;
 
 // Re-export commonly used context utilities for convenience
 pub const trace_context = @import("context_utils.zig");
+pub const getActiveSpan = @import("context_utils.zig").getActiveSpan;
 
 // Core interfaces (Phase 4 - Implemented)
 pub const tracer_zig = @import("tracer.zig");

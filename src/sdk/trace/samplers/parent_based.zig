@@ -1,59 +1,62 @@
-//! ParentBasedSampler - Follows parent span sampling decisions
+//! ParentBasedSampler - Routes sampling decisions based on parent span context
 //!
-//! This sampler implements the OpenTelemetry ParentBased sampling strategy:
-//! - If parent span exists and is sampled -> sample child span
-//! - If parent span exists and is not sampled -> don't sample child span
-//! - If no parent span (root span) -> delegate to root sampler
+//! Implements the OTel spec ParentBased sampler with four delegate samplers:
+//!
+//!   | Parent  | is_remote | isSampled | Delegate                  |
+//!   | ------- | --------- | --------- | ------------------------- |
+//!   | absent  | n/a       | n/a       | root                      |
+//!   | present | true      | true      | remote_parent_sampled     |
+//!   | present | true      | false     | remote_parent_not_sampled |
+//!   | present | false     | true      | local_parent_sampled      |
+//!   | present | false     | false     | local_parent_not_sampled  |
 
 const std = @import("std");
 const otel_api = @import("otel-api");
 const SampleParams = otel_api.trace.Sampler.Params;
 const SamplingResult = otel_api.trace.Sampler.Result;
-const SamplingDecision = otel_api.trace.Sampler.Decision;
 const Sampler = otel_api.trace.Sampler;
 const TraceId = otel_api.common.TraceId;
 const SpanId = otel_api.common.SpanId;
 const trace_context = otel_api.trace.trace_context;
 
-/// Sampler that follows parent span sampling decisions with root sampler fallback
+/// Sampler that routes to one of five delegates based on parent context.
 pub const ParentBasedSampler = struct {
-    /// Sampler to use for root spans (when no parent exists)
     root_sampler: Sampler,
+    remote_parent_sampled: Sampler,
+    remote_parent_not_sampled: Sampler,
+    local_parent_sampled: Sampler,
+    local_parent_not_sampled: Sampler,
 
-    /// Create a new ParentBasedSampler
-    pub fn init(root_sampler: Sampler) ParentBasedSampler {
-        return ParentBasedSampler{
-            .root_sampler = root_sampler,
+    /// Optional delegate overrides. All default to AlwaysOn/AlwaysOff per spec.
+    pub const Options = struct {
+        remote_parent_sampled: Sampler = .{ .keep = {} },
+        remote_parent_not_sampled: Sampler = .{ .drop = {} },
+        local_parent_sampled: Sampler = .{ .keep = {} },
+        local_parent_not_sampled: Sampler = .{ .drop = {} },
+    };
+
+    pub fn init(root: Sampler, options: Options) ParentBasedSampler {
+        return .{
+            .root_sampler = root,
+            .remote_parent_sampled = options.remote_parent_sampled,
+            .remote_parent_not_sampled = options.remote_parent_not_sampled,
+            .local_parent_sampled = options.local_parent_sampled,
+            .local_parent_not_sampled = options.local_parent_not_sampled,
         };
     }
 
-    /// Make sampling decision based on parent span context
     pub fn shouldSample(self: *const ParentBasedSampler, params: SampleParams) SamplingResult {
-        // Extract parent span context from incoming context
-        const parent_span_context = trace_context.getSpanContext(params.context);
-
-        if (parent_span_context) |parent| {
-            // Parent exists - follow parent's sampling decision
-            if (parent.trace_flags & otel_api.trace.Span.Context.SAMPLED_FLAG != 0) {
-                // Parent was sampled -> sample child
-                var result = Sampler.Result{ .decision = .record_and_sample };
-                // Preserve parent's trace state if it exists
-                result.trace_state = parent.trace_state;
-                return result;
-            } else {
-                // Parent was not sampled -> don't sample child
-                var result = Sampler.Result{ .decision = .drop };
-                // Preserve parent's trace state if it exists
-                result.trace_state = parent.trace_state;
-                return result;
-            }
-        } else {
-            // No parent (root span) -> delegate to root sampler
+        const parent = trace_context.getSpanContext(params.context) orelse
             return self.root_sampler.shouldSample(params);
-        }
+
+        const delegate = if (parent.is_remote)
+            if (parent.isSampled()) self.remote_parent_sampled else self.remote_parent_not_sampled
+        else
+            if (parent.isSampled()) self.local_parent_sampled else self.local_parent_not_sampled;
+
+        return delegate.shouldSample(params);
     }
 
-    /// Get description of this sampler
     pub fn getDescription(self: *const ParentBasedSampler) []const u8 {
         _ = self;
         return "ParentBasedSampler";
@@ -63,92 +66,106 @@ pub const ParentBasedSampler = struct {
 // Tests
 const testing = std.testing;
 
-test "ParentBasedSampler - no parent delegates to root sampler" {
-    // Test with root sampler that always samples
-    const root_sampler = Sampler{ .keep = {} };
-    const sampler = ParentBasedSampler.init(root_sampler);
+fn makeCtxWithParent(allocator: std.mem.Allocator, sampled: bool, is_remote: bool) ![]otel_api.ContextKeyValue {
+    const parent_span_context = otel_api.trace.Span.Context{
+        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .span_id = SpanId.fromBytes([_]u8{2} ** 8),
+        .trace_flags = if (sampled) otel_api.trace.Span.Context.SAMPLED_FLAG else 0,
+        .trace_state = null,
+        .is_remote = is_remote,
+    };
+    return trace_context.withActiveSpanContext(allocator, &.{}, parent_span_context);
+}
 
-    const params = SampleParams{
+test "ParentBasedSampler - no parent delegates to root sampler" {
+    const sampler = ParentBasedSampler.init(.{ .keep = {} }, .{});
+
+    const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
-        .context = &.{}, // Empty context (no parent)
+        .context = &.{},
         .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
         .span_name = "root-span",
         .span_kind = .server,
-    };
-
-    const result = sampler.shouldSample(params);
-    try testing.expect(result.decision == .record_and_sample);
+    });
+    try testing.expectEqual(Sampler.Decision.record_and_sample, result.decision);
 }
 
-test "ParentBasedSampler - sampled parent produces sampled child" {
-    const root_sampler = Sampler{ .drop = {} }; // Root would drop, but parent overrides
-    const sampler = ParentBasedSampler.init(root_sampler);
+test "ParentBasedSampler - remote+sampled routes to remoteParentSampled" {
+    var called = false;
+    _ = &called;
+    // Use always_off as root so we can confirm the delegate (always_on) wins
+    const sampler = ParentBasedSampler.init(.{ .drop = {} }, .{
+        .remote_parent_sampled = .{ .keep = {} },
+    });
 
-    // Create context with sampled parent span context
-    const ctx = try otel_api.ContextKeyValue.initOwnedSlice(testing.allocator, &.{});
+    const ctx = try makeCtxWithParent(testing.allocator, true, true);
     defer otel_api.ContextKeyValue.deinitOwnedSlice(testing.allocator, ctx);
 
-    const parent_span_context = otel_api.trace.Span.Context{
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
-        .span_id = SpanId.fromBytes([_]u8{2} ** 8),
-        .trace_flags = otel_api.trace.Span.Context.SAMPLED_FLAG, // Parent is sampled
-        .trace_state = "parent=sampled",
-        .is_remote = false,
-    };
-
-    const ctx_with_parent = try trace_context.withActiveSpanContext(testing.allocator, ctx, parent_span_context);
-    defer otel_api.ContextKeyValue.deinitOwnedSlice(testing.allocator, ctx_with_parent);
-
-    const params = SampleParams{
+    const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
-        .context = ctx_with_parent,
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16), // Same trace as parent
-        .span_name = "child-span",
-        .span_kind = .internal,
-    };
-
-    const result = sampler.shouldSample(params);
-    try testing.expect(result.decision == .record_and_sample);
-    try testing.expect(result.trace_state != null);
-    try testing.expectEqualStrings("parent=sampled", result.trace_state.?);
+        .context = ctx,
+        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .span_name = "child",
+        .span_kind = .client,
+    });
+    try testing.expectEqual(Sampler.Decision.record_and_sample, result.decision);
 }
 
-test "ParentBasedSampler - unsampled parent produces unsampled child" {
-    const root_sampler = Sampler{ .keep = {} }; // Root would sample, but parent overrides
-    const sampler = ParentBasedSampler.init(root_sampler);
+test "ParentBasedSampler - remote+unsampled routes to remoteParentNotSampled" {
+    const sampler = ParentBasedSampler.init(.{ .keep = {} }, .{
+        .remote_parent_not_sampled = .{ .drop = {} },
+    });
 
-    // Create context with unsampled parent span context
-    const ctx = try otel_api.ContextKeyValue.initOwnedSlice(testing.allocator, &.{});
-    defer otel_api.ContextKeyValue.deinitOwnedSlice(testing.allocator, &.{});
+    const ctx = try makeCtxWithParent(testing.allocator, false, true);
+    defer otel_api.ContextKeyValue.deinitOwnedSlice(testing.allocator, ctx);
 
-    const parent_span_context = otel_api.trace.Span.Context{
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
-        .span_id = SpanId.fromBytes([_]u8{2} ** 8),
-        .trace_flags = 0, // Parent is NOT sampled
-        .trace_state = "parent=not_sampled",
-        .is_remote = true,
-    };
-
-    const ctx_with_parent = try trace_context.withActiveSpanContext(testing.allocator, ctx, parent_span_context);
-    defer otel_api.ContextKeyValue.deinitOwnedSlice(testing.allocator, ctx_with_parent);
-
-    const params = SampleParams{
+    const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
-        .context = ctx_with_parent,
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16), // Same trace as parent
-        .span_name = "child-span",
+        .context = ctx,
+        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .span_name = "child",
         .span_kind = .client,
-    };
+    });
+    try testing.expectEqual(Sampler.Decision.drop, result.decision);
+}
 
-    const result = sampler.shouldSample(params);
-    try testing.expect(result.decision == .drop);
-    try testing.expect(result.trace_state != null);
-    try testing.expectEqualStrings("parent=not_sampled", result.trace_state.?);
+test "ParentBasedSampler - local+sampled routes to localParentSampled" {
+    const sampler = ParentBasedSampler.init(.{ .drop = {} }, .{
+        .local_parent_sampled = .{ .keep = {} },
+    });
+
+    const ctx = try makeCtxWithParent(testing.allocator, true, false);
+    defer otel_api.ContextKeyValue.deinitOwnedSlice(testing.allocator, ctx);
+
+    const result = sampler.shouldSample(.{
+        .allocator = testing.allocator,
+        .context = ctx,
+        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .span_name = "child",
+        .span_kind = .internal,
+    });
+    try testing.expectEqual(Sampler.Decision.record_and_sample, result.decision);
+}
+
+test "ParentBasedSampler - local+unsampled routes to localParentNotSampled" {
+    const sampler = ParentBasedSampler.init(.{ .keep = {} }, .{
+        .local_parent_not_sampled = .{ .drop = {} },
+    });
+
+    const ctx = try makeCtxWithParent(testing.allocator, false, false);
+    defer otel_api.ContextKeyValue.deinitOwnedSlice(testing.allocator, ctx);
+
+    const result = sampler.shouldSample(.{
+        .allocator = testing.allocator,
+        .context = ctx,
+        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .span_name = "child",
+        .span_kind = .internal,
+    });
+    try testing.expectEqual(Sampler.Decision.drop, result.decision);
 }
 
 test "ParentBasedSampler - description" {
-    const root_sampler = Sampler{ .drop = {} };
-    const sampler = ParentBasedSampler.init(root_sampler);
-    const description = sampler.getDescription();
-    try testing.expectEqualStrings("ParentBasedSampler", description);
+    const sampler = ParentBasedSampler.init(.{ .drop = {} }, .{});
+    try testing.expectEqualStrings("ParentBasedSampler", sampler.getDescription());
 }

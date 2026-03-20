@@ -93,6 +93,7 @@ pub const StandardTracer = struct {
             .span_kind = opts.kind,
             .attributes = attributes,
             .links = links,
+            .parent_ctx = parent_span_context,
         };
 
         // Get sampling decision

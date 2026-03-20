@@ -166,6 +166,21 @@ fn parseTraceparent(traceparent: []const u8) !api.trace.Span.Context {
     };
 }
 
+/// Extract a remote SpanContext from raw traceparent/tracestate header values.
+///
+/// Returns null when traceparent is absent or malformed — callers can treat
+/// null as "no parent" and start a root span.  This is the low-level helper
+/// for frameworks that have already fetched the header strings; use
+/// W3cPropagator.extract() when working with a TextMapCarrier instead.
+pub fn spanContextFromHeaders(
+    traceparent: ?[]const u8,
+    tracestate: ?[]const u8,
+) ?api.trace.Span.Context {
+    const tp = traceparent orelse return null;
+    const sc = parseTraceparent(tp) catch return null;
+    return if (tracestate) |ts| sc.withTraceState(ts).asRemote() else sc.asRemote();
+}
+
 /// Create a W3C propagator instance wrapped in TextMapPropagator
 pub fn createW3cPropagator() TextMapPropagator {
     return .{ .w3c = W3cPropagator.init() };
