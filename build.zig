@@ -332,7 +332,6 @@ pub fn build(b: *std.Build) void {
     simple_trace_sdk_example.root_module.addImport("otel-api", otel_api_mod);
     simple_trace_sdk_example.root_module.addImport("otel-sdk", otel_sdk_mod);
     simple_trace_sdk_example.root_module.addImport("otel-exporters", otel_exporters_mod);
-    b.installArtifact(simple_trace_sdk_example);
 
     const run_simple_trace_sdk = b.addRunArtifact(simple_trace_sdk_example);
     const simple_trace_sdk_step = b.step("example-simple-trace-sdk", "Run simple trace SDK example");
@@ -350,7 +349,6 @@ pub fn build(b: *std.Build) void {
     comprehensive_trace_sdk_example.root_module.addImport("otel-api", otel_api_mod);
     comprehensive_trace_sdk_example.root_module.addImport("otel-sdk", otel_sdk_mod);
     comprehensive_trace_sdk_example.root_module.addImport("otel-exporters", otel_exporters_mod);
-    b.installArtifact(comprehensive_trace_sdk_example);
 
     const run_comprehensive_trace_sdk = b.addRunArtifact(comprehensive_trace_sdk_example);
     const comprehensive_trace_sdk_step = b.step("example-comprehensive-trace-sdk", "Run comprehensive trace SDK example");
@@ -368,7 +366,6 @@ pub fn build(b: *std.Build) void {
     simple_trace_otlp_example.root_module.addImport("otel-api", otel_api_mod);
     simple_trace_otlp_example.root_module.addImport("otel-sdk", otel_sdk_mod);
     simple_trace_otlp_example.root_module.addImport("otel-exporters", otel_exporters_mod);
-    b.installArtifact(simple_trace_otlp_example);
 
     const run_simple_trace_otlp = b.addRunArtifact(simple_trace_otlp_example);
     const simple_trace_otlp_step = b.step("example-simple-trace-otlp", "Run simple trace OTLP example");
@@ -386,7 +383,6 @@ pub fn build(b: *std.Build) void {
     error_handling_demo_example.root_module.addImport("otel-api", otel_api_mod);
     error_handling_demo_example.root_module.addImport("otel-sdk", otel_sdk_mod);
     error_handling_demo_example.root_module.addImport("otel-exporters", otel_exporters_mod);
-    b.installArtifact(error_handling_demo_example);
 
     const run_error_handling_demo = b.addRunArtifact(error_handling_demo_example);
     const error_handling_demo_step = b.step("example-error-handling", "Run error handling demo example");
@@ -404,7 +400,6 @@ pub fn build(b: *std.Build) void {
     validation_test_example.root_module.addImport("otel-api", otel_api_mod);
     validation_test_example.root_module.addImport("otel-sdk", otel_sdk_mod);
     validation_test_example.root_module.addImport("otel-exporters", otel_exporters_mod);
-    b.installArtifact(validation_test_example);
 
     const run_validation_test = b.addRunArtifact(validation_test_example);
     const validation_test_step = b.step("example-validation-test", "Run validation test example");
@@ -422,7 +417,6 @@ pub fn build(b: *std.Build) void {
     force_flush_test_example.root_module.addImport("otel-api", otel_api_mod);
     force_flush_test_example.root_module.addImport("otel-sdk", otel_sdk_mod);
     force_flush_test_example.root_module.addImport("otel-exporters", otel_exporters_mod);
-    b.installArtifact(force_flush_test_example);
 
     const run_force_flush_test = b.addRunArtifact(force_flush_test_example);
     const force_flush_test_step = b.step("example-force-flush-test", "Run force flush test example");
@@ -441,7 +435,6 @@ pub fn build(b: *std.Build) void {
     multithreaded_http_example.root_module.addImport("otel-sdk", otel_sdk_mod);
     multithreaded_http_example.root_module.addImport("otel-exporters", otel_exporters_mod);
     multithreaded_http_example.root_module.addImport("otel-semconv", otel_semconv_mod);
-    b.installArtifact(multithreaded_http_example);
 
     const run_multithreaded_http = b.addRunArtifact(multithreaded_http_example);
     if (b.args) |args| {
@@ -450,7 +443,24 @@ pub fn build(b: *std.Build) void {
     const multithreaded_http_step = b.step("example-multithreaded-http", "Run multithreaded HTTP telemetry example");
     multithreaded_http_step.dependOn(&run_multithreaded_http.step);
 
-    // All examples step
+    // Examples install step (explicitly opt-in)
+    const examples_install_step = b.step("examples-install", "Build and install example executables");
+    const install_simple_trace_sdk = b.addInstallArtifact(simple_trace_sdk_example, .{});
+    const install_comprehensive_trace_sdk = b.addInstallArtifact(comprehensive_trace_sdk_example, .{});
+    const install_simple_trace_otlp = b.addInstallArtifact(simple_trace_otlp_example, .{});
+    const install_error_handling_demo = b.addInstallArtifact(error_handling_demo_example, .{});
+    const install_validation_test = b.addInstallArtifact(validation_test_example, .{});
+    const install_force_flush_test = b.addInstallArtifact(force_flush_test_example, .{});
+    const install_multithreaded_http = b.addInstallArtifact(multithreaded_http_example, .{});
+    examples_install_step.dependOn(&install_simple_trace_sdk.step);
+    examples_install_step.dependOn(&install_comprehensive_trace_sdk.step);
+    examples_install_step.dependOn(&install_simple_trace_otlp.step);
+    examples_install_step.dependOn(&install_error_handling_demo.step);
+    examples_install_step.dependOn(&install_validation_test.step);
+    examples_install_step.dependOn(&install_force_flush_test.step);
+    examples_install_step.dependOn(&install_multithreaded_http.step);
+
+    // All examples step (runs them)
     const examples_step = b.step("examples", "Run all examples");
     examples_step.dependOn(&run_dns_query.step);
     examples_step.dependOn(&run_dns_query_otlp.step);

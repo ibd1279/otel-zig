@@ -8,11 +8,15 @@ The code targets zig version 0.15.1. This often means you should ask the human w
 
 ## Build Commands
 
-- `zig build` - Build all libraries and examples
+- `zig build` - Build and compile all libraries (otel-api, otel-sdk, otel-exporters, otel)
+- `zig build install` - Install libraries to the standard install directory
 - `zig build test` - Run all unit tests
 - `zig build test-api` - Run API-only tests
 - `zig build test-sdk` - Run SDK-only tests
 - `zig build test-exporters` - Run exporter tests
+- `zig build examples` - Run all examples without installing
+- `zig build examples-install` - Build and install example executables
+- `zig build example-<name>` - Run a specific example (e.g., `zig build example-multithreaded-http`)
 - `zig build --verbose example-multithreaded-http -- console 20 1.0` - run a comprehensive test for 20 seconds outputting to the console.
 - `zig build --verbose example-multithreaded-http -- otlp 20 0.5` - run a comprehensive test for 20 seconds using the otlp exporter and sampling 50%.
 - `zig build -l` - to list all the build targets and to find one not on this list.
