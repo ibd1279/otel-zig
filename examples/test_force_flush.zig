@@ -8,23 +8,25 @@ const otel_api = @import("otel-api");
 const otel_sdk = @import("otel-sdk");
 const otel_exporters = @import("otel-exporters");
 
+var program_start: std.time.Instant = undefined;
+
 // Custom exporter to track flush and export calls
 const TrackingExporter = struct {
     pub const PipelineStep = otel_sdk.common.PipelineStepInstructions(
         TrackingExporter,
         otel_sdk.trace.SpanExporter,
-        void,
+        std.Io,
         spanExporter,
         _init,
         otel_sdk.common.PipelineDeinitConnection,
     );
 
-    pub fn _init(self: *TrackingExporter, ctx: void, allocator: std.mem.Allocator) !void {
-        _ = ctx;
-        self.* = init(allocator);
+    pub fn _init(self: *TrackingExporter, ctx: std.Io, allocator: std.mem.Allocator) !void {
+        self.* = init(allocator, ctx);
     }
 
     allocator: std.mem.Allocator,
+    io: std.Io,
     export_count: std.atomic.Value(u32),
     flush_count: std.atomic.Value(u32),
     last_export_time: std.atomic.Value(i64),
@@ -36,9 +38,10 @@ const TrackingExporter = struct {
     var global_last_export_time: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
     var global_last_flush_time: std.atomic.Value(i64) = std.atomic.Value(i64).init(0);
 
-    pub fn init(allocator: std.mem.Allocator) TrackingExporter {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io) TrackingExporter {
         return .{
             .allocator = allocator,
+            .io = io,
             .export_count = std.atomic.Value(u32).init(0),
             .flush_count = std.atomic.Value(u32).init(0),
             .last_export_time = std.atomic.Value(i64).init(0),
@@ -58,14 +61,15 @@ const TrackingExporter = struct {
         _ = resource;
         _ = self.export_count.fetchAdd(1, .monotonic);
         _ = global_export_count.fetchAdd(1, .monotonic);
-        const current_time = std.time.milliTimestamp();
+        const now = std.time.Instant.now() catch return .failure;
+        const current_time: i64 = @intCast(now.since(program_start) / std.time.ns_per_ms);
         self.last_export_time.store(current_time, .release);
         global_last_export_time.store(current_time, .release);
 
-        std.debug.print("[EXPORTER] Exporting {} spans at time {}\n", .{ spans.len, current_time });
+        std.debug.print("[EXPORTER] Exporting {} spans at time {}ms\n", .{ spans.len, current_time });
 
         // Simulate some export work
-        std.Thread.sleep(50 * std.time.ns_per_ms);
+        std.Io.sleep(self.io, .{ .nanoseconds = 50 * std.time.ns_per_ms }, .awake) catch {};
         return .success;
     }
 
@@ -73,11 +77,12 @@ const TrackingExporter = struct {
         _ = timeout_ms;
         _ = self.flush_count.fetchAdd(1, .monotonic);
         _ = global_flush_count.fetchAdd(1, .monotonic);
-        const current_time = std.time.milliTimestamp();
+        const now = std.time.Instant.now() catch return .failure;
+        const current_time: i64 = @intCast(now.since(program_start) / std.time.ns_per_ms);
         self.last_flush_time.store(current_time, .release);
         global_last_flush_time.store(current_time, .release);
 
-        std.debug.print("[EXPORTER] ForceFlush called at time {}\n", .{current_time});
+        std.debug.print("[EXPORTER] ForceFlush called at time {}ms\n", .{current_time});
 
         return .success;
     }
@@ -93,20 +98,19 @@ const TrackingExporter = struct {
     }
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
 
+    program_start = try std.time.Instant.now();
     std.debug.print("\n=== Testing Enhanced forceFlush ===\n\n", .{});
 
     // Setup batch processor with tracking exporter
     const concrete_provider = try otel_sdk.trace.setupGlobalProvider(
-        allocator,
+        init,
         .{otel_sdk.trace.BatchSpanProcessor.PipelineStep.init(.{
             .export_interval_ms = 5000, // 5 second interval
             .max_queue_size = 100,
-        }).flowTo(TrackingExporter.PipelineStep.init({}))},
+        }).flowTo(TrackingExporter.PipelineStep.init(io))},
     );
     defer {
         concrete_provider.deinit();
@@ -117,7 +121,7 @@ pub fn main() !void {
     const scope = otel_api.InstrumentationScope{ .name = "force_flush_test", .version = "1.0.0" };
     var tracer = try otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
 
-    const start_time = std.time.milliTimestamp();
+    const start_time: i64 = 0; // relative to program_start
 
     // Create some spans
     std.debug.print("Creating spans...\n", .{});
@@ -130,17 +134,20 @@ pub fn main() !void {
         span.end(null);
         span.deinit();
         std.debug.print("  Created span {}\n", .{i});
-        std.Thread.sleep(100 * std.time.ns_per_ms);
+        try std.Io.sleep(io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake);
     }
 
-    const after_spans_time = std.time.milliTimestamp();
+    const after_spans_now = try std.time.Instant.now();
+    const after_spans_time: i64 = @intCast(after_spans_now.since(program_start) / std.time.ns_per_ms);
     std.debug.print("\nTime after creating spans: {} ms from start\n", .{after_spans_time - start_time});
 
     // Test 1: Force flush should trigger immediate export
     std.debug.print("\n[TEST 1] Calling forceFlush - should trigger immediate export\n", .{});
-    const flush_start = std.time.milliTimestamp();
+    const flush_start_now = try std.time.Instant.now();
     const flush_result = concrete_provider.forceFlush(2000);
-    const flush_end = std.time.milliTimestamp();
+    const flush_end_now = try std.time.Instant.now();
+    const flush_start: i64 = @intCast(flush_start_now.since(program_start) / std.time.ns_per_ms);
+    const flush_end: i64 = @intCast(flush_end_now.since(program_start) / std.time.ns_per_ms);
 
     std.debug.print("ForceFlush result: {}\n", .{flush_result});
     std.debug.print("ForceFlush took {} ms\n", .{flush_end - flush_start});
@@ -185,7 +192,7 @@ pub fn main() !void {
     const thread = try std.Thread.spawn(.{}, FlushThread.run, .{concrete_provider});
 
     // Give thread time to start
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    try std.Io.sleep(io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake);
 
     // Try to flush from main thread too
     std.debug.print("  [Main] Starting flush...\n", .{});
@@ -213,7 +220,7 @@ pub fn main() !void {
     std.debug.print("Flush with 1ms timeout result: {}\n", .{timeout_result});
 
     // Give time for background export to complete
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    try std.Io.sleep(io, .{ .nanoseconds = 200 * std.time.ns_per_ms }, .awake);
 
     // Final stats
     std.debug.print("\n=== Final Statistics ===\n", .{});

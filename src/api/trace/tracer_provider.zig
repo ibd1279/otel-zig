@@ -23,7 +23,7 @@ pub const TracerProvider = union(enum) {
     /// Implementations must return the same tracer for the same scope.
     pub inline fn getTracerWithScope(self: *const TracerProvider, scope: InstrumentationScope) !Tracer {
         return switch (self.*) {
-            .noop => |_| Tracer{ .noop = {} },
+            .noop => Tracer{ .noop = {} },
             .bridge => |*bridge| bridge.getTracerWithScopeFn(bridge.provider_ptr, scope),
         };
     }

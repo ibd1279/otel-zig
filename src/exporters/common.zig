@@ -5,6 +5,7 @@
 
 const std = @import("std");
 
+
 /// Errors that can occur during export operations
 pub const ExportError = error{
     /// Export operation timed out
@@ -119,8 +120,8 @@ pub const ExportStats = struct {
     /// Total number of items dropped
     dropped_items: u64 = 0,
 
-    /// Last export timestamp (milliseconds since epoch)
-    last_export_time: ?i64 = null,
+    /// Last export timestamp
+    last_export_time: ?std.Io.Timestamp = null,
 
     /// Last export duration in milliseconds
     last_export_duration_ms: ?u64 = null,
@@ -131,7 +132,7 @@ pub const ExportStats = struct {
     pub fn recordSuccess(self: *ExportStats, items: u64, duration_ms: u64) void {
         self.success_count += 1;
         self.exported_items += items;
-        self.last_export_time = std.time.milliTimestamp();
+        self.last_export_time = std.Io.Timestamp.zero;
         self.last_export_duration_ms = duration_ms;
 
         // Update average duration
@@ -142,7 +143,7 @@ pub const ExportStats = struct {
     pub fn recordFailure(self: *ExportStats, items: u64) void {
         self.failure_count += 1;
         self.dropped_items += items;
-        self.last_export_time = std.time.milliTimestamp();
+        self.last_export_time = std.Io.Timestamp.zero;
     }
 };
 

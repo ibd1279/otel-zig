@@ -38,8 +38,8 @@ pub const Logger = union(enum) {
         severity: ?api.logs.Severity,
         body: ?api.AttributeValue,
         attributes: ?[]const api.AttributeKeyValue,
-        timestamp_ns: ?i64,
-        observed_timestamp_ns: ?i64,
+        timestamp: ?std.Io.Timestamp,
+        observed_timestamp: ?std.Io.Timestamp,
         event_name: ?[]const u8,
         severity_text: ?[]const u8,
         trace_id: ?api.common.TraceId,
@@ -47,15 +47,15 @@ pub const Logger = union(enum) {
         flags: ?u8,
     ) void {
         switch (self.*) {
-            .noop => |_| {},
+            .noop => {},
             .bridge => |bridge| bridge.emitLogRecordFn(
                 bridge.logger_ptr,
                 ctx,
                 severity,
                 body,
                 attributes,
-                timestamp_ns,
-                observed_timestamp_ns,
+                timestamp,
+                observed_timestamp,
                 event_name,
                 severity_text,
                 trace_id,
@@ -68,7 +68,7 @@ pub const Logger = union(enum) {
     /// Check if logging is enabled for a given severity
     pub inline fn enabled(self: *const Logger, ctx: []const api.ContextKeyValue, severity: ?api.logs.Severity) bool {
         return switch (self.*) {
-            .noop => |_| return false,
+            .noop => return false,
             .bridge => |bridge| bridge.enabledFn(bridge.logger_ptr, ctx, severity),
         };
     }
@@ -81,7 +81,7 @@ pub const Logger = union(enum) {
         event_name: []const u8,
     ) bool {
         return switch (self.*) {
-            .noop => |_| return false,
+            .noop => return false,
             .bridge => |bridge| bridge.enabledWithEventFn(bridge.logger_ptr, ctx, severity, event_name),
         };
     }
@@ -179,8 +179,8 @@ pub const Logger = union(enum) {
             severity,
             .{ .string = message },
             null, // attributes
-            @as(i64, @intCast(std.time.nanoTimestamp())), // timestamp_ns
-            null, // observed_timestamp_ns
+            null, // timestamp — SDK fills in using io clock
+            null, // observed_timestamp — SDK fills in using io clock
             null, // event_name
             null, // severity_text
             null, // trace_id
@@ -199,8 +199,8 @@ pub const LoggerBridge = struct {
         severity: ?api.logs.Severity,
         body: ?api.AttributeValue,
         attributes: ?[]const api.AttributeKeyValue,
-        timestamp_ns: ?i64,
-        observed_timestamp_ns: ?i64,
+        timestamp: ?std.Io.Timestamp,
+        observed_timestamp: ?std.Io.Timestamp,
         event_name: ?[]const u8,
         severity_text: ?[]const u8,
         trace_id: ?api.common.TraceId,
@@ -221,8 +221,8 @@ pub const LoggerBridge = struct {
                 severity: ?api.logs.Severity,
                 body: ?api.AttributeValue,
                 attributes: ?[]const api.AttributeKeyValue,
-                timestamp_ns: ?i64,
-                observed_timestamp_ns: ?i64,
+                timestamp: ?std.Io.Timestamp,
+                observed_timestamp: ?std.Io.Timestamp,
                 event_name: ?[]const u8,
                 severity_text: ?[]const u8,
                 trace_id: ?api.common.TraceId,
@@ -236,8 +236,8 @@ pub const LoggerBridge = struct {
                     severity,
                     body,
                     attributes,
-                    timestamp_ns,
-                    observed_timestamp_ns,
+                    timestamp,
+                    observed_timestamp,
                     event_name,
                     severity_text,
                     trace_id,

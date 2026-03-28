@@ -17,8 +17,8 @@ const Event = @This();
 /// Human-readable name for the event
 name: []const u8,
 
-/// Timestamp of the event in nanoseconds since Unix epoch
-timestamp_ns: i64,
+/// Timestamp of the event. If null, the SDK will use the current time.
+timestamp: ?std.Io.Timestamp = null,
 
 /// Optional attributes providing additional context about the event
 attributes: []const api.AttributeKeyValue = &.{},

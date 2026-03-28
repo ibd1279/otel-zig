@@ -1,9 +1,9 @@
 const std = @import("std");
 
-const err: std.fs.File = std.fs.File.stderr();
-const out: std.fs.File = std.fs.File.stdout();
+const err: std.Io.File = std.Io.File.stderr();
+const out: std.Io.File = std.Io.File.stdout();
 
-pub fn initStream(use_stderr: bool, buffer: []u8) std.fs.File.Writer {
+pub fn initStream(io: std.Io, use_stderr: bool, buffer: []u8) std.Io.File.Writer {
     const fh = if (use_stderr) err else out;
-    return fh.writer(buffer);
+    return fh.writer(io, buffer);
 }

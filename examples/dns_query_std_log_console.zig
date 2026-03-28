@@ -28,20 +28,18 @@ pub const std_options: std.Options = .{
     .logFn = otel_sdk.std_log_bridge.otelLogFn,
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Clean up global providers at program exit
     defer otel_api.provider_registry.unsetAllProviders();
 
     // Setup global OTel logging provider with console exporter
     var stderr_buffer = [_]u8{0} ** 1024;
-    const stderr_fh = std.fs.File.stderr();
-    var stderr = stderr_fh.writer(&stderr_buffer);
+    var stderr = std.Io.File.stderr().writer(io, &stderr_buffer);
     const provider = try otel_sdk.logs.setupGlobalProvider(
-        allocator,
+        init,
         .{otel_sdk.logs.SimpleLogRecordProcessor.PipelineStep.init({})
             .flowTo(otel_exporters.stream.LogRecordSink.PipelineStep.init(.{ .writer = &stderr.interface }))},
     );
@@ -65,16 +63,16 @@ pub fn main() !void {
     std.log.info("DNS Query Example application starting (using std.log bridge)", .{});
 
     // Perform DNS query with std.log calls
-    try performDnsQuery(allocator);
+    try performDnsQuery(allocator, io);
 
     // Log application shutdown
     std.log.info("DNS Query Example application shutting down", .{});
 
-    // Give OTLP exporter time to flush
-    std.Thread.sleep(1 * std.time.ns_per_s);
+    // Give exporter time to flush
+    std.Io.sleep(io, .{ .nanoseconds = 1 * std.time.ns_per_s }, .awake) catch {};
 }
 
-fn performDnsQuery(allocator: std.mem.Allocator) !void {
+fn performDnsQuery(allocator: std.mem.Allocator, io: std.Io) !void {
     const hostname = "google.com";
 
     // Create scoped logger for DNS operations
@@ -87,15 +85,34 @@ fn performDnsQuery(allocator: std.mem.Allocator) !void {
     dns_log.debug("DNS resolution starting for {s}", .{hostname});
 
     // Perform the actual DNS lookup
-    const address_list = std.net.getAddressList(allocator, hostname, 80) catch |err| {
+    const host_name = try std.Io.net.HostName.init(hostname);
+    var lookup_buffer: [32]std.Io.net.HostName.LookupResult = undefined;
+    var lookup_queue: std.Io.Queue(std.Io.net.HostName.LookupResult) = .init(&lookup_buffer);
+    var canonical_name_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+
+    std.Io.net.HostName.lookup(host_name, io, &lookup_queue, .{
+        .port = 80,
+        .canonical_name_buffer = &canonical_name_buffer,
+    }) catch |err| {
         // Log DNS query failure using std.log
         dns_log.err("DNS query failed for {s}: {}", .{ hostname, err });
         return err;
     };
-    defer address_list.deinit();
+
+    // Collect resolved addresses from the closed queue
+    var addrs: std.ArrayList(std.Io.net.IpAddress) = .empty;
+    defer addrs.deinit(allocator);
+
+    while (true) {
+        const result = lookup_queue.getOneUncancelable(io) catch break;
+        switch (result) {
+            .address => |addr| try addrs.append(allocator, addr),
+            .canonical_name => {},
+        }
+    }
 
     // Calculate timing information
-    const addr_count = address_list.addrs.len;
+    const addr_count = addrs.items.len;
 
     // Log successful DNS resolution
     dns_log.info("DNS query completed successfully for {s} - resolved {} addresses", .{ hostname, addr_count });
@@ -104,9 +121,11 @@ fn performDnsQuery(allocator: std.mem.Allocator) !void {
     const ip_log = std.log.scoped(.ip_resolver);
 
     // Log each resolved IP address
-    for (address_list.addrs, 0..) |addr, i| {
-        const ip_str = try std.fmt.allocPrint(allocator, "{f}", .{addr.in});
-        defer allocator.free(ip_str);
+    for (addrs.items, 0..) |addr, i| {
+        var ip_buf: [64]u8 = undefined;
+        var ip_writer = std.Io.Writer.fixed(&ip_buf);
+        try addr.format(&ip_writer);
+        const ip_str = ip_buf[0..ip_writer.end];
 
         ip_log.debug("Resolved IP address #{}: {s} for {s}", .{ i, ip_str, hostname });
     }

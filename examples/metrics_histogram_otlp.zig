@@ -20,15 +20,14 @@ const otel_api = @import("otel-api");
 const otel_sdk = @import("otel-sdk");
 const otel_exporters = @import("otel-exporters");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     const concrete_provider = try otel_sdk.metrics.setupGlobalProvider(
-        allocator,
-        .{otel_sdk.metrics.ManualReader.PipelineStep.init({})
-            .flowTo(otel_exporters.otlp.OtlpMetricExporter.PipelineStep.init(.{}))},
+        init,
+        .{otel_sdk.metrics.ManualReader.PipelineStep.init(.{ .io = io })
+            .flowTo(otel_exporters.otlp.OtlpMetricExporter.PipelineStep.init(.{ .io = io }))},
     );
     defer {
         concrete_provider.deinit();

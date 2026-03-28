@@ -31,7 +31,7 @@ test "BatchLogRecordProcessor basic functionality" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.LoggerProvider.init(allocator, resource);
+    var provider = sdk.LoggerProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     // Create mock exporter (heap-allocated, processor takes ownership)
@@ -93,7 +93,7 @@ test "BasicLogger log emission through pipeline" {
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
 
-    var provider = sdk.LoggerProvider.init(allocator, resource);
+    var provider = sdk.LoggerProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     // Create mock exporter
@@ -164,7 +164,7 @@ test "BasicLogger severity filtering" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.LoggerProvider.init(allocator, resource);
+    var provider = sdk.LoggerProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     // Add a processor so enabled() can return true per spec
@@ -194,7 +194,7 @@ test "BasicLogger processor enabled() integration" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.LoggerProvider.init(allocator, resource);
+    var provider = sdk.LoggerProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.logger", .version = "1.0.0" };
@@ -231,7 +231,7 @@ test "BasicLogger shutdown behavior" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.LoggerProvider.init(allocator, resource);
+    var provider = sdk.LoggerProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const mock_exporter = try allocator.create(MockLogRecordExporter);
@@ -266,7 +266,7 @@ test "BasicLoggerProvider flush behavior" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.LoggerProvider.init(allocator, resource);
+    var provider = sdk.LoggerProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const mock_exporter = try allocator.create(MockLogRecordExporter);
@@ -292,7 +292,7 @@ test "BasicLogger with attributes and timestamps" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.LoggerProvider.init(allocator, resource);
+    var provider = sdk.LoggerProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const mock_exporter = try allocator.create(MockLogRecordExporter);
@@ -312,8 +312,8 @@ test "BasicLogger with attributes and timestamps" {
         .{ .key = "key2", .value = .{ .int = 42 } },
     };
 
-    const timestamp = 1234567890000000000;
-    const observed_timestamp = 1234567890000000001;
+    const timestamp = std.Io.Timestamp.fromNanoseconds(1234567890000000000);
+    const observed_timestamp = std.Io.Timestamp.fromNanoseconds(1234567890000000001);
 
     // Emit log with attributes and timestamps
     logger.emitLogRecord(
@@ -336,8 +336,8 @@ test "BasicLogger with attributes and timestamps" {
     if (mock_exporter.getRecord(0)) |record| {
         try testing.expectEqual(api.logs.Severity.warn, record.severity_number);
         try testing.expectEqualStrings("Warning with attributes", record.body.?.string);
-        try testing.expectEqual(@as(?i64, timestamp), record.timestamp_ns);
-        try testing.expectEqual(@as(?i64, observed_timestamp), record.observed_timestamp_ns);
+        try testing.expectEqual(timestamp, record.timestamp);
+        try testing.expectEqual(observed_timestamp, record.observed_timestamp);
         try testing.expectEqualStrings("test.event", record.event_name.?);
         try testing.expectEqualStrings("WARN", record.severity_text.?);
         try testing.expectEqual(@as(usize, 2), record.attributes.len);

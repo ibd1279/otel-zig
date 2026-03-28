@@ -8,6 +8,12 @@ const testing = std.testing;
 const otel_api = @import("otel-api");
 const otel_sdk = @import("otel-sdk");
 
+fn nanoTimestamp() i64 {
+    var ts: std.posix.system.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000_000 + @as(i64, ts.nsec);
+}
+
 const ObservableResult = otel_api.metrics.ObservableResult;
 const TypeErasedCallback = otel_api.metrics.TypeErasedCallback;
 const createTypeErasedCallback = otel_api.metrics.createTypeErasedCallback;
@@ -503,7 +509,7 @@ test "stress test with many concurrent operations" {
         }
     };
 
-    const start_time = std.time.nanoTimestamp();
+    const start_time = nanoTimestamp();
 
     // Start stress test threads
     for (0..num_worker_threads) |i| {
@@ -522,7 +528,7 @@ test "stress test with many concurrent operations" {
         thread.join();
     }
 
-    const end_time = std.time.nanoTimestamp();
+    const end_time = nanoTimestamp();
     const duration_ms = @as(f64, @floatFromInt(end_time - start_time)) / 1_000_000.0;
 
     // Final verification

@@ -99,7 +99,7 @@ pub const ProcessDetector = struct {
                 // const buf = try arena.allocator().alloc(u8, size);
                 const buf = try arena.allocator().allocSentinel(u8, size, 0);
 
-                if (std.c._NSGetExecutablePath(buf, &size) == 0) {
+                if (std.c._NSGetExecutablePath(buf.ptr, &size) == 0) {
                     const path = std.mem.sliceTo(buf, 0);
                     const basename = std.fs.path.basename(path);
                     attrs = attrs.add(.{ .key = "process.executable.path", .value = .{ .string = path } });
@@ -123,12 +123,8 @@ pub const ProcessDetector = struct {
             else => @compileError("unsupported OS."),
         }
 
-        // Command line args (if available)
-        if (std.process.argsAlloc(arena.allocator())) |args| {
-            if (args.len > 0) {
-                attrs = attrs.add(.{ .key = "process.command", .value = .{ .string = args[0] } });
-            }
-        } else |_| {}
+        // Command line args are now obtained from main(init: std.process.Init) in 0.16.
+        // process.command detection is skipped here; callers can add it via CustomDetector.
 
         return try sdk.Resource.initOwnedFromBuilder(allocator, null, &attrs);
     }
@@ -198,7 +194,11 @@ pub const EnvironmentDetector = struct {
         var attrs = AttributeBuilder.init(arena.allocator());
 
         // Check OTEL_RESOURCE_ATTRIBUTES
-        if (std.process.getEnvVarOwned(arena.allocator(), "OTEL_RESOURCE_ATTRIBUTES")) |env_attrs| {
+        const env_attrs_opt: ?[]u8 = if (std.c.getenv("OTEL_RESOURCE_ATTRIBUTES")) |cstr|
+            arena.allocator().dupe(u8, std.mem.sliceTo(cstr, 0)) catch null
+        else
+            null;
+        if (env_attrs_opt) |env_attrs| {
 
             // Parse key=value pairs separated by commas
             var iter = std.mem.tokenizeScalar(u8, env_attrs, ',');
@@ -210,12 +210,13 @@ pub const EnvironmentDetector = struct {
                     attrs = attrs.add(.{ .key = key, .value = .{ .string = value } });
                 }
             }
-        } else |_| {}
+        }
 
         // Check OTEL_SERVICE_NAME
-        if (std.process.getEnvVarOwned(arena.allocator(), "OTEL_SERVICE_NAME")) |service_name| {
+        if (std.c.getenv("OTEL_SERVICE_NAME")) |cstr| {
+            const service_name = try arena.allocator().dupe(u8, std.mem.sliceTo(cstr, 0));
             attrs = attrs.add(.{ .key = "service.name", .value = .{ .string = service_name } });
-        } else |_| {}
+        }
 
         return try sdk.Resource.initOwnedFromBuilder(allocator, null, &attrs);
     }

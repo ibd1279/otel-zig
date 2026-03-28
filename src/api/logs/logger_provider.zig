@@ -25,7 +25,7 @@ pub const LoggerProvider = union(enum) {
     /// and will not take ownership of it.
     pub inline fn getLoggerWithScope(self: *const LoggerProvider, scope: InstrumentationScope) !Logger {
         return switch (self.*) {
-            .noop => |_| Logger{ .noop = {} },
+            .noop => Logger{ .noop = {} },
             .bridge => |*bridge| bridge.getLoggerWithScopeFn(bridge.provider_ptr, scope),
         };
     }

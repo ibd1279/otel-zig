@@ -6,6 +6,12 @@
 const std = @import("std");
 const api = @import("otel-api");
 
+fn nanoTimestamp() i64 {
+    var ts: std.posix.system.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000_000 + @as(i64, ts.nsec);
+}
+
 const sdk = struct {
     const AggregationTemporality = @import("aggregations.zig").AggregationTemporality;
     const InstrumentType = @import("metadata.zig").InstrumentType;
@@ -365,7 +371,7 @@ pub fn Observable(comptime T: type) type {
         /// Execute a single callback with proper error handling and timing
         fn executeCallback(self: *Self, allocator: std.mem.Allocator, entry: *CallbackEntry) ![]api.metrics.ObservableResult(T).Measurement {
             const ctx = &[_]api.ContextKeyValue{};
-            const start_time = std.time.nanoTimestamp();
+            const start_time = nanoTimestamp();
 
             var result = api.metrics.ObservableResult(T).empty;
             defer result.deinit(allocator);
@@ -378,7 +384,7 @@ pub fn Observable(comptime T: type) type {
 
             // Record timing if enabled
             if (self.config.measure_callbacks) {
-                const end_time = std.time.nanoTimestamp();
+                const end_time = nanoTimestamp();
                 const execution_time = @as(u64, @intCast(end_time - start_time));
 
                 // Record execution metrics using OTel instruments

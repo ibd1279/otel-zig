@@ -7,6 +7,12 @@ const std = @import("std");
 const testing = std.testing;
 const otel_api = @import("otel-api");
 
+fn milliTimestamp() i64 {
+    var ts: std.posix.system.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 const ObservableCounter = otel_api.metrics.ObservableCounter;
 const ObservableGauge = otel_api.metrics.ObservableGauge;
 const ObservableUpDownCounter = otel_api.metrics.ObservableUpDownCounter;
@@ -41,7 +47,7 @@ test "ObservableResult with attributes and timestamps" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    const timestamp: i64 = @intCast(std.time.milliTimestamp());
+    const timestamp: i64 = @intCast(milliTimestamp());
     var result = ObservableResult(f64).init(allocator, timestamp);
     defer result.deinit();
 

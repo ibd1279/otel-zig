@@ -26,20 +26,26 @@ const sdk = struct {
 
 /// Basic periodic metrics processor that collects metrics at regular intervals
 pub const PeriodicReader = struct {
+    pub const Config = struct {
+        io: std.Io,
+        interval_ms: ?u32 = null,
+    };
+
     pub const PipelineStep = @import("../common/pipeline.zig").PipelineStepInstructions(
         PeriodicReader,
         sdk.Reader,
-        ?u32,
+        Config,
         reader,
         _initFn,
         setExporter,
     );
-    pub fn _initFn(self: *PeriodicReader, interval: ?u32, allocator: std.mem.Allocator) !void {
-        self.* = try init(allocator, null, interval);
+    pub fn _initFn(self: *PeriodicReader, ctx: Config, allocator: std.mem.Allocator) !void {
+        self.* = try init(allocator, ctx.io, null, ctx.interval_ms);
         try self.start();
     }
 
     allocator: std.mem.Allocator,
+    io: std.Io,
     exporter: ?sdk.MetricExporter,
     mutex: std.Thread.Mutex,
     condition: std.Thread.Condition,
@@ -47,7 +53,6 @@ pub const PeriodicReader = struct {
     is_running: std.atomic.Value(bool),
     collection_in_progress: std.atomic.Value(bool),
     collection_complete: std.Thread.Condition,
-    last_collection_time: std.atomic.Value(i64),
     thread: ?std.Thread,
     collection_interval_ms: u32,
     registered_meters: std.ArrayListUnmanaged(*sdk.Meter),
@@ -57,11 +62,13 @@ pub const PeriodicReader = struct {
     /// collection_interval_ms: How often to collect metrics (default: 60000ms = 60s)
     pub fn init(
         allocator: std.mem.Allocator,
+        io: std.Io,
         exporter: ?sdk.MetricExporter,
         collection_interval_ms: ?u32,
     ) !PeriodicReader {
         return .{
             .allocator = allocator,
+            .io = io,
             .exporter = exporter,
             .mutex = .{},
             .condition = .{},
@@ -69,7 +76,6 @@ pub const PeriodicReader = struct {
             .is_running = std.atomic.Value(bool).init(false),
             .collection_in_progress = std.atomic.Value(bool).init(false),
             .collection_complete = .{},
-            .last_collection_time = std.atomic.Value(i64).init(0),
             .thread = null,
             .collection_interval_ms = collection_interval_ms orelse 60000, // 60 seconds default
             .registered_meters = .{},
@@ -168,7 +174,7 @@ pub const PeriodicReader = struct {
         }
 
         // Collect all the aggregated metrics.
-        const collected_metrics = self.reader_state.collect(allocator) catch |err| {
+        const collected_metrics = self.reader_state.collect(allocator, self.io) catch |err| {
             std.log.err("Failed to collect metrics: {}", .{err});
             // Log error if needed
             return;
@@ -194,7 +200,7 @@ pub const PeriodicReader = struct {
 
     /// Force flush the exporter
     pub fn forceFlush(self: *PeriodicReader, timeout_ms: ?u64) api.common.FlushResult {
-        const start_time = std.time.milliTimestamp();
+        const start_ts = std.Io.Clock.real.now(self.io) catch std.Io.Timestamp.zero;
 
         // force flush has to cascade to the exporter as well, but we don't need to hold the mutex for that part.
         {
@@ -203,9 +209,10 @@ pub const PeriodicReader = struct {
             // Wait for any existing collection to complete
             while (self.collection_in_progress.load(.acquire)) {
                 if (timeout_ms) |collection_timeout| {
-                    const delta: u64 = @intCast(std.time.milliTimestamp() - start_time);
-                    if (delta >= collection_timeout) return .timeout;
-                    self.collection_complete.timedWait(&self.mutex, collection_timeout - delta) catch {
+                    const now_ts = std.Io.Clock.real.now(self.io) catch std.Io.Timestamp.zero;
+                    const elapsed_ms: u64 = @intCast(@max(0, @divTrunc(now_ts.nanoseconds - start_ts.nanoseconds, std.time.ns_per_ms)));
+                    if (elapsed_ms >= collection_timeout) return .timeout;
+                    self.collection_complete.timedWait(&self.mutex, (collection_timeout - elapsed_ms) * std.time.ns_per_ms) catch {
                         return .timeout;
                     };
                 } else {
@@ -219,9 +226,10 @@ pub const PeriodicReader = struct {
         // Flush the exporter
         return if (self.exporter) |exporter| blk: {
             if (timeout_ms) |collection_timeout| {
-                const delta: u64 = @intCast(std.time.milliTimestamp() - start_time);
-                if (delta >= collection_timeout) return .timeout;
-                break :blk exporter.forceFlush(collection_timeout - delta).asFlushResult();
+                const now_ts = std.Io.Clock.real.now(self.io) catch std.Io.Timestamp.zero;
+                const elapsed_ms: u64 = @intCast(@max(0, @divTrunc(now_ts.nanoseconds - start_ts.nanoseconds, std.time.ns_per_ms)));
+                if (elapsed_ms >= collection_timeout) return .timeout;
+                break :blk exporter.forceFlush(collection_timeout - elapsed_ms).asFlushResult();
             } else {
                 break :blk exporter.forceFlush(null).asFlushResult();
             }
@@ -328,8 +336,6 @@ pub const PeriodicReader = struct {
                 continue;
             }
 
-            // Update last collection time
-            self.last_collection_time.store(std.time.milliTimestamp(), .release);
             self.internalCollect();
         }
     }
@@ -345,14 +351,18 @@ test "BasicPeriodicProcessor - direct init vs pipeline init thread behavior" {
     mock_exporter.* = MockExporter.init(allocator);
 
     // Create a provider to tie all the parts together.
-    var provider = sdk.MeterProvider.init(allocator, sdk.Resource.empty);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, sdk.Resource.empty);
     defer provider.deinit();
+
+    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .empty });
+    defer threaded.deinit();
+    const io = threaded.ioBasic();
 
     // Create processor with very short interval for testing (direct init)
     const processor = try allocator.create(PeriodicReader);
     {
         errdefer allocator.destroy(processor);
-        processor.* = try PeriodicReader.init(allocator, mock_exporter.metricExporter(), 100); // 100ms
+        processor.* = try PeriodicReader.init(allocator, io, mock_exporter.metricExporter(), 100); // 100ms
         {
             errdefer processor.deinit();
             try provider.registerReader(processor.reader());
@@ -384,7 +394,7 @@ test "BasicPeriodicProcessor - direct init vs pipeline init thread behavior" {
     try testing.expect(processor.registered_meters.items.len == 2);
 
     // Wait a bit to allow some collections to happen
-    std.Thread.sleep(250 * std.time.ns_per_ms);
+    try std.Io.sleep(std.testing.io, .{ .nanoseconds = 250 * std.time.ns_per_ms }, .awake);
 
     // Verify some exports happened (thread is working)
     const export_count = mock_exporter.exportCount();
@@ -395,7 +405,7 @@ test "BasicPeriodicProcessor - direct init vs pipeline init thread behavior" {
     try testing.expect(processor.is_shutdown.load(.acquire));
 
     // Give thread time to exit
-    std.Thread.sleep(50 * std.time.ns_per_ms);
+    try std.Io.sleep(std.testing.io, .{ .nanoseconds = 50 * std.time.ns_per_ms }, .awake);
 }
 
 test "BasicPeriodicProcessor - no thread start without meters" {
@@ -403,7 +413,7 @@ test "BasicPeriodicProcessor - no thread start without meters" {
     const allocator = testing.allocator;
 
     // Create processor
-    var processor = try PeriodicReader.init(allocator, null, 100);
+    var processor = try PeriodicReader.init(allocator, std.testing.io, null, 100);
     defer processor.deinit();
 
     // Verify thread is not running
@@ -428,19 +438,23 @@ test "PeriodicReader and Observable instrument test." {
     const allocator = testing.allocator;
     const MockExporter = @import("exporter.zig").MockMetricExporter;
 
+    var threaded = std.Io.Threaded.init(allocator, .{ .environ = .empty });
+    defer threaded.deinit();
+    const io = threaded.ioBasic();
+
     // Create mock exporter
     const mock_exporter = try allocator.create(MockExporter);
     mock_exporter.* = MockExporter.init(allocator);
 
     // Create a provider to tie all the parts together.
-    var provider = sdk.MeterProvider.init(allocator, sdk.Resource.empty);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, sdk.Resource.empty);
     defer provider.deinit();
 
     // Create processor with very short interval for testing (direct init)
     const processor = try allocator.create(PeriodicReader);
     {
         errdefer allocator.destroy(processor);
-        processor.* = try PeriodicReader.init(allocator, mock_exporter.metricExporter(), 100); // 100ms
+        processor.* = try PeriodicReader.init(allocator, io, mock_exporter.metricExporter(), 100); // 100ms
         {
             errdefer processor.deinit();
             try provider.registerReader(processor.reader());

@@ -151,10 +151,8 @@ fn handleGenericError(info: otel_api.common.ErrorInfo) void {
     }
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
     std.debug.print("🚀 OpenTelemetry Error Handling Demo\n", .{});
     std.debug.print("====================================\n\n", .{});
@@ -174,7 +172,7 @@ pub fn main() !void {
 
     // Initialize OpenTelemetry with error-prone configuration
     std.debug.print("🔧 Setting up OpenTelemetry...\n", .{});
-    const provider = setupOpenTelemetryWithErrors(allocator) catch |err| {
+    const provider = setupOpenTelemetryWithErrors(init) catch |err| {
         std.debug.print("❌ Failed to setup OpenTelemetry: {}\n", .{err});
         return;
     };
@@ -209,12 +207,12 @@ pub fn main() !void {
     std.debug.print("✅ Demo completed successfully!\n", .{});
 }
 
-fn setupOpenTelemetryWithErrors(allocator: std.mem.Allocator) !*otel_sdk.trace.TracerProvider {
+fn setupOpenTelemetryWithErrors(init: std.process.Init) !*otel_sdk.trace.TracerProvider {
     // Set up OpenTelemetry with console export (less likely to fail than OTLP)
     return try otel_sdk.trace.setupGlobalProvider(
-        allocator,
+        init,
         .{otel_sdk.trace.BasicSpanProcessor.PipelineStep.init({})
-            .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{}))},
+            .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{ .io = init.io }))},
     );
 }
 
@@ -335,15 +333,15 @@ fn measurePerformanceImpact(allocator: std.mem.Allocator) !void {
     std.debug.print("Running {} setAttribute operations...\n", .{iterations});
 
     // Measure setAttribute performance
-    const start_time = std.time.nanoTimestamp();
+    const start_instant = try std.time.Instant.now();
 
     for (0..iterations) |i| {
         const key = if (i % 100 == 0) "" else "test.key"; // 1% invalid keys
         span.setAttribute(.{ .key = key, .value = .{ .int = @intCast(i) } });
     }
 
-    const end_time = std.time.nanoTimestamp();
-    const duration_ns = end_time - start_time;
+    const end_instant = try std.time.Instant.now();
+    const duration_ns: i64 = @intCast(end_instant.since(start_instant));
     const ns_per_op = @divTrunc(duration_ns, iterations);
 
     std.debug.print("Performance results:\n", .{});

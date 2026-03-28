@@ -13,7 +13,7 @@ const DefaultProvider = logs_provider.LoggerProvider;
 
 /// Create a default provider value with automatically detected resources.
 /// Returns provider by value - used internally by setupGlobalProvider.
-fn createDefaultProviderValue(allocator: std.mem.Allocator) !DefaultProvider {
+fn createDefaultProviderValue(allocator: std.mem.Allocator, io: std.Io) !DefaultProvider {
     // Step 1: Detect resource
     const detected_resource = try detectResource(allocator);
     errdefer detected_resource.deinitOwned(allocator);
@@ -21,6 +21,7 @@ fn createDefaultProviderValue(allocator: std.mem.Allocator) !DefaultProvider {
     // Step 2: Create provider
     return DefaultProvider.init(
         allocator,
+        io,
         detected_resource,
     );
 }
@@ -29,12 +30,13 @@ fn createDefaultProviderValue(allocator: std.mem.Allocator) !DefaultProvider {
 /// Creates a heap-allocated provider, configures the pipeline using the provided links,
 /// registers it with the global registry, and returns the concrete provider pointer.
 /// The caller is responsible for calling deinit() and destroy() on the returned provider.
-pub fn setupGlobalProvider(allocator: std.mem.Allocator, links: anytype) !*DefaultProvider {
+pub fn setupGlobalProvider(init: std.process.Init, links: anytype) !*DefaultProvider {
+    const allocator = init.gpa;
     // 1. Create heap-allocated concrete provider
     const provider_ptr = try allocator.create(DefaultProvider);
     errdefer allocator.destroy(provider_ptr);
 
-    provider_ptr.* = try createDefaultProviderValue(allocator);
+    provider_ptr.* = try createDefaultProviderValue(allocator, init.io);
     errdefer provider_ptr.deinit();
 
     // 2. Configure pipeline using the links tuple

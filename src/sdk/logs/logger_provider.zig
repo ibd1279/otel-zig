@@ -22,6 +22,7 @@ const sdk = struct {
 /// Basic logger provider with caching
 pub const LoggerProvider = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     resource: sdk.Resource,
     cache: std.HashMapUnmanaged(api.InstrumentationScope, *sdk.logs.Logger, sdk.common.InstrumentationScopeMapContext, 80),
     processors: std.ArrayListUnmanaged(sdk.logs.LogRecordProcessor),
@@ -31,10 +32,12 @@ pub const LoggerProvider = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        io: std.Io,
         resource: sdk.Resource,
     ) LoggerProvider {
         return .{
             .allocator = allocator,
+            .io = io,
             .resource = resource,
             .cache = .empty,
             .processors = .empty,

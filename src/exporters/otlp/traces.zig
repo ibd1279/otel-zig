@@ -131,11 +131,11 @@ pub const OtlpTraceExporter = struct {
     }
 
     fn sendRequest(self: *OtlpTraceExporter, allocator: std.mem.Allocator, traces_data: trace_v1.TracesData) !ExportResult {
-        var client = std.http.Client{ .allocator = self.allocator };
+        var client = std.http.Client{ .allocator = self.allocator, .io = self.config.io };
         defer client.deinit();
 
         // Serialize to binary protobuf
-        var buffer = std.io.Writer.Allocating.init(allocator);
+        var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
         try traces_data.encode(&buffer.writer, allocator); // protobuf encoding.
         // _ = try buffer.writer.write(try traces_data.jsonEncode(.{}, allocator)); // Json encoding.
@@ -281,8 +281,8 @@ fn convertToOtlpFormat(allocator: std.mem.Allocator, spans: []const otel_sdk.tra
                 .span_id = try allocator.dupe(u8, span_data.ctx.span_id.bytes[0..]),
                 .parent_span_id = if (span_data.parent_ctx) |pctx| try allocator.dupe(u8, pctx.span_id.bytes[0..]) else &.{},
                 .name = try allocator.dupe(u8, span_data.name),
-                .start_time_unix_nano = @intCast(span_data.start_time),
-                .end_time_unix_nano = @intCast(span_data.end_time),
+                .start_time_unix_nano = @intCast(span_data.start_time.toNanoseconds()),
+                .end_time_unix_nano = @intCast(span_data.end_time.toNanoseconds()),
                 .flags = @intCast(span_data.ctx.trace_flags),
                 .kind = @enumFromInt(@intFromEnum(span_data.kind)),
                 .trace_state = if (span_data.ctx.trace_state) |ts| try allocator.dupe(u8, ts) else &.{},
@@ -309,7 +309,7 @@ fn convertToOtlpFormat(allocator: std.mem.Allocator, spans: []const otel_sdk.tra
                 for (span_data.events) |span_event| {
                     var event = trace_v1.Span.Event{
                         .name = try allocator.dupe(u8, span_event.name),
-                        .time_unix_nano = @intCast(span_event.timestamp_ns),
+                        .time_unix_nano = @intCast((span_event.timestamp orelse std.Io.Timestamp.zero).toNanoseconds()),
                         .dropped_attributes_count = 0,
                     };
                     for (span_event.attributes) |attr| {
@@ -347,10 +347,10 @@ fn convertToOtlpFormat(allocator: std.mem.Allocator, spans: []const otel_sdk.tra
 }
 
 /// Create an OTLP trace exporter with default configuration
-pub fn createTraceExporter(allocator: std.mem.Allocator) !SpanExporter {
+pub fn createTraceExporter(allocator: std.mem.Allocator, io: std.Io) !SpanExporter {
     const exporter = try allocator.create(OtlpTraceExporter);
     errdefer allocator.destroy(exporter);
-    exporter.* = OtlpTraceExporter.init(allocator, .{});
+    exporter.* = OtlpTraceExporter.init(allocator, .{ .io = io });
     return exporter.spanExporter();
 }
 
@@ -366,7 +366,7 @@ test "OtlpTraceExporter basic functionality" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var exporter = OtlpTraceExporter.init(allocator, .{});
+    var exporter = OtlpTraceExporter.init(allocator, .{ .io = std.testing.io });
     defer exporter.deinit();
 
     const result = exporter.forceFlush(5000);

@@ -8,6 +8,18 @@ const testing = std.testing;
 const otel_api = @import("otel-api");
 const otel_sdk = @import("otel-sdk");
 
+fn nanoTimestamp() i64 {
+    var ts: std.posix.system.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000_000_000 + @as(i64, ts.nsec);
+}
+
+fn milliTimestamp() i64 {
+    var ts: std.posix.system.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 const ObservableResult = otel_api.metrics.ObservableResult;
 const TypeErasedCallback = otel_api.metrics.TypeErasedCallback;
 const createTypeErasedCallback = otel_api.metrics.createTypeErasedCallback;
@@ -93,7 +105,7 @@ fn heavyCallback(result: *ObservableResult(i64), state: *ConcurrentState) void {
 
 // Stateless callback for testing
 fn statelessCallback(result: *ObservableResult(i64)) void {
-    const timestamp = std.time.milliTimestamp();
+    const timestamp = milliTimestamp();
     result.observeValue(@mod(timestamp, 1000)) catch {};
 }
 
@@ -393,9 +405,9 @@ test "large scale collection performance" {
     }
 
     // Time the collection
-    const start_time = std.time.nanoTimestamp();
+    const start_time = nanoTimestamp();
     const metrics = try gauge.collect(allocator);
-    const end_time = std.time.nanoTimestamp();
+    const end_time = nanoTimestamp();
     defer allocator.free(metrics);
 
     const collection_time_ns = @as(u64, @intCast(end_time - start_time));

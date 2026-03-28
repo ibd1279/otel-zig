@@ -25,10 +25,8 @@ fn validationErrorHandler(info: otel_api.common.ErrorInfo, allocator: ?std.mem.A
     print("\n", .{});
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const io = init.io;
 
     print("🧪 OpenTelemetry Validation Test Example\n", .{});
     print("=" ** 50 ++ "\n\n", .{});
@@ -38,10 +36,9 @@ pub fn main() !void {
 
     // Set up logging provider
     var stderr_buffer = [_]u8{0} ** 1024;
-    const stderr_fh = std.fs.File.stderr();
-    var stderr = stderr_fh.writer(&stderr_buffer);
+    var stderr = std.Io.File.stderr().writer(io, &stderr_buffer);
     const log_provider = try otel_sdk.logs.setupGlobalProvider(
-        allocator,
+        init,
         .{otel_sdk.logs.SimpleLogRecordProcessor.PipelineStep.init({})
             .flowTo(otel_exporters.stream.LogRecordSink.PipelineStep.init(.{ .writer = &stderr.interface }))},
     );
@@ -52,8 +49,8 @@ pub fn main() !void {
 
     // Set up metrics provider
     const metric_provider = try otel_sdk.metrics.setupGlobalProvider(
-        allocator,
-        .{otel_sdk.metrics.ManualReader.PipelineStep.init({})
+        init,
+        .{otel_sdk.metrics.ManualReader.PipelineStep.init(.{ .io = io })
             .flowTo(otel_exporters.stream.MetricDataSink.PipelineStep.init(.{ .writer = &stderr.interface }))},
     );
     defer {

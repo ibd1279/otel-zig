@@ -25,6 +25,7 @@ const sdk = struct {
 /// Basic implementation of the TracerProvider interface
 pub const TracerProvider = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     resource: sdk.Resource,
     cache: std.HashMapUnmanaged(api.InstrumentationScope, *sdk.trace.Tracer, sdk.common.InstrumentationScopeMapContext, 80),
     processors: std.ArrayListUnmanaged(sdk.trace.SpanDataProcessor),
@@ -37,12 +38,14 @@ pub const TracerProvider = struct {
     /// Create a new basic tracer provider
     pub fn init(
         allocator: std.mem.Allocator,
+        io: std.Io,
         resource: sdk.Resource,
         id_generator: sdk.trace.IdGenerator,
         sampler: api.trace.Sampler,
     ) TracerProvider {
         return .{
             .allocator = allocator,
+            .io = io,
             .resource = resource,
             .cache = .empty,
             .processors = .empty,
@@ -193,6 +196,7 @@ test "TracerProvider basic operations" {
 
     var provider_ptr = TracerProvider.init(
         allocator,
+        std.testing.io,
         resource,
         sdk.trace.createDefaultIdGenerator(),
         sdk.trace.samplers.always_on,

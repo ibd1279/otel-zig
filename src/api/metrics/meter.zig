@@ -69,7 +69,7 @@ pub const Meter = union(enum) {
         };
 
         return switch (self.*) {
-            .noop => |_| Counter(T){ .noop = name },
+            .noop => Counter(T){ .noop = name },
             .bridge => |*bridge| switch (T) {
                 i64 => bridge.createCounterI64Fn(bridge.meter_ptr, name, description, unit, advisory),
                 f64 => bridge.createCounterF64Fn(bridge.meter_ptr, name, description, unit, advisory),
@@ -102,7 +102,7 @@ pub const Meter = union(enum) {
         };
 
         return switch (self.*) {
-            .noop => |_| UpDownCounter(T){ .noop = name },
+            .noop => UpDownCounter(T){ .noop = name },
             .bridge => |*bridge| switch (T) {
                 i64 => bridge.createUpDownCounterI64Fn(bridge.meter_ptr, name, description, unit, advisory),
                 f64 => bridge.createUpDownCounterF64Fn(bridge.meter_ptr, name, description, unit, advisory),
@@ -135,7 +135,7 @@ pub const Meter = union(enum) {
         };
 
         return switch (self.*) {
-            .noop => |_| Gauge(T){ .noop = name },
+            .noop => Gauge(T){ .noop = name },
             .bridge => |*bridge| switch (T) {
                 i64 => bridge.createGaugeI64Fn(bridge.meter_ptr, name, description, unit, advisory),
                 f64 => bridge.createGaugeF64Fn(bridge.meter_ptr, name, description, unit, advisory),
@@ -168,7 +168,7 @@ pub const Meter = union(enum) {
         };
 
         return switch (self.*) {
-            .noop => |_| Histogram(T){ .noop = name },
+            .noop => Histogram(T){ .noop = name },
             .bridge => |*bridge| switch (T) {
                 i64 => bridge.createHistogramI64Fn(bridge.meter_ptr, name, description, unit, advisory),
                 f64 => bridge.createHistogramF64Fn(bridge.meter_ptr, name, description, unit, advisory),
@@ -202,7 +202,7 @@ pub const Meter = union(enum) {
         };
 
         return switch (self.*) {
-            .noop => |_| ObservableInstrument(T){ .noop = name },
+            .noop => ObservableInstrument(T){ .noop = name },
             .bridge => |*bridge| switch (T) {
                 i64 => bridge.createObservableCounterI64Fn(bridge.meter_ptr, name, description, unit, advisory, callbacks),
                 f64 => bridge.createObservableCounterF64Fn(bridge.meter_ptr, name, description, unit, advisory, callbacks),
@@ -236,7 +236,7 @@ pub const Meter = union(enum) {
         };
 
         return switch (self.*) {
-            .noop => |_| ObservableInstrument(T){ .noop = name },
+            .noop => ObservableInstrument(T){ .noop = name },
             .bridge => |*bridge| switch (T) {
                 i64 => bridge.createObservableGaugeI64Fn(bridge.meter_ptr, name, description, unit, advisory, callbacks),
                 f64 => bridge.createObservableGaugeF64Fn(bridge.meter_ptr, name, description, unit, advisory, callbacks),
@@ -270,7 +270,7 @@ pub const Meter = union(enum) {
         };
 
         return switch (self.*) {
-            .noop => |_| ObservableInstrument(T){ .noop = name },
+            .noop => ObservableInstrument(T){ .noop = name },
             .bridge => |*bridge| switch (T) {
                 i64 => bridge.createObservableUpDownCounterI64Fn(bridge.meter_ptr, name, description, unit, advisory, callbacks),
                 f64 => bridge.createObservableUpDownCounterF64Fn(bridge.meter_ptr, name, description, unit, advisory, callbacks),

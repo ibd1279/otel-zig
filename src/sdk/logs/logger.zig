@@ -22,7 +22,7 @@ pub const Logger = struct {
         min_severity: api.logs.Severity,
     ) Logger {
         return .{
-            .provider = provider_ptr,
+            .provider = provider_ptr, // io is accessed via provider.io
             .scope = instrument_scope,
             .is_shutdown = .init(false),
             .min_severity = .init(min_severity),
@@ -43,8 +43,8 @@ pub const Logger = struct {
         severity: ?api.logs.Severity,
         body: ?api.common.AttributeValue,
         attributes: ?[]const api.AttributeKeyValue,
-        timestamp_ns: ?i64,
-        observed_timestamp_ns: ?i64,
+        timestamp: ?std.Io.Timestamp,
+        observed_timestamp: ?std.Io.Timestamp,
         event_name: ?[]const u8,
         severity_text: ?[]const u8,
         trace_id: ?api.common.TraceId,
@@ -82,10 +82,12 @@ pub const Logger = struct {
             const sid = validated_span_id orelse if (span_context) |span_ctx| span_ctx.span_id else null;
             const tf = validated_flags orelse if (span_context) |span_ctx| span_ctx.trace_flags else null;
 
+            // Fill in timestamps from io clock if not provided by caller
+            const now = std.Io.Clock.real.now(self.provider.io) catch std.Io.Timestamp.zero;
             // Construct LogRecord from individual parameters
             const record = sdk.logs.LogRecord{
-                .timestamp_ns = timestamp_ns,
-                .observed_timestamp_ns = observed_timestamp_ns,
+                .timestamp = timestamp,
+                .observed_timestamp = observed_timestamp orelse now,
                 .severity_number = record_severity,
                 .severity_text = validated_severity_text,
                 .body = validated_body,

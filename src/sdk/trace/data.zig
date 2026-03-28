@@ -33,8 +33,8 @@ pub const SpanData = struct {
     name: []const u8,
     kind: api.trace.Span.Kind,
     status: api.trace.Span.Status,
-    start_time: i64,
-    end_time: i64,
+    start_time: std.Io.Timestamp,
+    end_time: std.Io.Timestamp,
     attributes: []api.AttributeKeyValue,
 
     // sub-collections
@@ -70,7 +70,7 @@ pub const SpanData = struct {
             errdefer api.AttributeKeyValue.deinitOwnedSlice(allocator, event_attributes);
 
             events[h] = .{
-                .timestamp_ns = unowned.events[h].timestamp_ns,
+                .timestamp = unowned.events[h].timestamp,
                 .name = event_name,
                 .attributes = event_attributes,
             };
@@ -218,7 +218,11 @@ pub const RecordingSpan = struct {
 
     pub fn addEvent(self: *RecordingSpan, event: api.trace.Span.Event) void {
         // TODO: this should deep copy the event for memeory safety.
-        self.events.append(self.tracer.provider.allocator, event) catch {};
+        var e = event;
+        if (e.timestamp == null) {
+            e.timestamp = std.Io.Clock.real.now(self.tracer.provider.io) catch std.Io.Timestamp.zero;
+        }
+        self.events.append(self.tracer.provider.allocator, e) catch {};
     }
 
     pub fn addLink(self: *RecordingSpan, link: api.trace.Span.Link) anyerror!void {
@@ -232,8 +236,8 @@ pub const RecordingSpan = struct {
     }
 
     pub fn end(self: *RecordingSpan, bridge: api.trace.Span.Bridge, options: ?api.trace.Span.EndOptions) void {
-        const default_ts: i64 = @intCast(std.time.nanoTimestamp());
-        const end_ts = if (options) |opts| opts.end_time_ns orelse default_ts else default_ts;
+        const default_ts = std.Io.Clock.real.now(self.tracer.provider.io) catch std.Io.Timestamp.zero;
+        const end_ts = if (options) |opts| opts.end_time orelse default_ts else default_ts;
 
         // Notify processor if available
         for (self.tracer.provider.processors.items) |*processor| {
@@ -244,8 +248,8 @@ pub const RecordingSpan = struct {
                 .name = self.name,
                 .kind = bridge.kind,
                 .status = self.status,
-                .start_time = bridge.start_ns,
-                .end_time = bridge.end_ns orelse end_ts,
+                .start_time = bridge.start_time,
+                .end_time = bridge.end_time orelse end_ts,
                 .attributes = self.attributes,
                 .events = self.events.items,
                 .links = self.links.items,
@@ -253,7 +257,7 @@ pub const RecordingSpan = struct {
         }
     }
 
-    pub fn recordException(self: *RecordingSpan, exception: anyerror, attributes: ?[]const AttributeKeyValue, timestamp: ?i64) anyerror!void {
+    pub fn recordException(self: *RecordingSpan, exception: anyerror, attributes: ?[]const AttributeKeyValue, timestamp: ?std.Io.Timestamp) anyerror!void {
         // TODO: these names should come from semconv, if they are defined there.
         const convention_attributes = &[_]AttributeKeyValue{ .{
             .key = "exception.type",
@@ -271,10 +275,10 @@ pub const RecordingSpan = struct {
         const exception_attrs: ?[]api.AttributeKeyValue = attrs_builder.build() catch null;
         if (exception_attrs) |attrs| self.tracer.provider.allocator.free(attrs);
 
-        const default_ts: i64 = @intCast(std.time.nanoTimestamp());
+        const default_ts = std.Io.Clock.real.now(self.tracer.provider.io) catch std.Io.Timestamp.zero;
         self.addEvent(.{
             .name = "exception",
-            .timestamp_ns = timestamp orelse default_ts,
+            .timestamp = timestamp orelse default_ts,
             .attributes = exception_attrs orelse convention_attributes,
         });
     }

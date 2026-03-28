@@ -21,10 +21,9 @@ const ServiceComponent = enum {
     payment_service,
 };
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     print("🚀 Starting Comprehensive Trace SDK Example\n", .{});
     print("=" ** 50 ++ "\n", .{});
@@ -33,10 +32,9 @@ pub fn main() !void {
     // Note: setupGlobalProvider uses automatic resource detection
     // The custom resource above demonstrates resource building but won't be used
     var stderr_buffer = [_]u8{0} ** 1024;
-    const stderr_fh = std.fs.File.stderr();
-    var stderr = stderr_fh.writer(&stderr_buffer);
+    var stderr = std.Io.File.stderr().writer(io, &stderr_buffer);
     const concrete_provider = try otel_sdk.trace.setupGlobalProvider(
-        allocator,
+        init,
         .{otel_sdk.trace.BasicSpanProcessor.PipelineStep.init({})
             .flowTo(otel_exporters.stream.SpanDataSink.PipelineStep.init(.{
             .writer = &stderr.interface,
@@ -55,10 +53,10 @@ pub fn main() !void {
     };
 
     // Run different test scenarios
-    try runHttpRequestScenario(&trace_setup);
+    try runHttpRequestScenario(io, &trace_setup);
     try runErrorHandlingScenario(&trace_setup);
-    try runMessageQueueScenario(&trace_setup);
-    try runConcurrentOperationsScenario(allocator, &trace_setup);
+    try runMessageQueueScenario(io, &trace_setup);
+    try runConcurrentOperationsScenario(io, allocator, &trace_setup);
     try runPerformanceTestScenario(&trace_setup);
 
     print("\n✅ All trace scenarios completed successfully!\n", .{});
@@ -84,7 +82,7 @@ fn getTracer(setup: *TraceSetup, component: ServiceComponent) !otel_api.trace.Tr
     return try setup.tracer_provider.getTracerWithScope(scope);
 }
 
-fn runHttpRequestScenario(setup: *TraceSetup) !void {
+fn runHttpRequestScenario(io: std.Io, setup: *TraceSetup) !void {
     print("\n📡 HTTP Request Scenario\n", .{});
     print("-" ** 30 ++ "\n", .{});
 
@@ -108,7 +106,6 @@ fn runHttpRequestScenario(setup: *TraceSetup) !void {
 
     try gateway_span.addEvent(otel_api.trace.Span.Event{
         .name = "request.validation.started",
-        .timestamp_ns = 0,
         .attributes = &[_]otel_api.common.AttributeKeyValue{
             .{ .key = "validation.schema_version", .value = .{ .string = "v1.2" } },
         },
@@ -147,7 +144,7 @@ fn runHttpRequestScenario(setup: *TraceSetup) !void {
     defer db_span.deinit();
 
     // Simulate database work
-    std.Thread.sleep(5 * std.time.ns_per_ms);
+    try std.Io.sleep(io, .{ .nanoseconds = 5 * std.time.ns_per_ms }, .awake);
     db_span.setAttribute(.{ .key = "db.rows_affected", .value = .{ .int = 1 } });
     db_span.end(null);
 
@@ -171,7 +168,6 @@ fn runHttpRequestScenario(setup: *TraceSetup) !void {
 
     try order_span.addEvent(otel_api.trace.Span.Event{
         .name = "inventory.check",
-        .timestamp_ns = 0,
         .attributes = &[_]otel_api.common.AttributeKeyValue{
             .{ .key = "inventory.available", .value = .{ .bool = true } },
         },
@@ -225,7 +221,6 @@ fn runErrorHandlingScenario(setup: *TraceSetup) !void {
     // Simulate validation failure
     try validation_span.addEvent(.{
         .name = "validation.failed",
-        .timestamp_ns = 0,
         .attributes = &[_]otel_api.common.AttributeKeyValue{
             .{ .key = "error.type", .value = .{ .string = "invalid_card" } },
             .{ .key = "error.message", .value = .{ .string = "Card has expired" } },
@@ -239,7 +234,6 @@ fn runErrorHandlingScenario(setup: *TraceSetup) !void {
     // Parent span also fails
     try payment_span.addEvent(.{
         .name = "payment.declined",
-        .timestamp_ns = 0,
         .attributes = &.{
             .{ .key = "decline.reason", .value = .{ .string = "expired_card" } },
             .{ .key = "retry.allowed", .value = .{ .bool = true } },
@@ -253,7 +247,7 @@ fn runErrorHandlingScenario(setup: *TraceSetup) !void {
     print("✅ Error handling scenario completed\n", .{});
 }
 
-fn runMessageQueueScenario(setup: *TraceSetup) !void {
+fn runMessageQueueScenario(io: std.Io, setup: *TraceSetup) !void {
     print("\n📨 Message Queue Scenario\n", .{});
     print("-" ** 30 ++ "\n", .{});
 
@@ -278,7 +272,6 @@ fn runMessageQueueScenario(setup: *TraceSetup) !void {
 
     try producer_span.addEvent(.{
         .name = "message.queued",
-        .timestamp_ns = 0,
         .attributes = &.{
             .{ .key = "serialization.format", .value = .{ .string = "json" } },
         },
@@ -288,7 +281,7 @@ fn runMessageQueueScenario(setup: *TraceSetup) !void {
     producer_span.end(null);
 
     // Simulate message transmission delay
-    std.Thread.sleep(2 * std.time.ns_per_ms);
+    try std.Io.sleep(io, .{ .nanoseconds = 2 * std.time.ns_per_ms }, .awake);
 
     // Consumer: Process message from queue
     const consumer_result = try mq_tracer.startSpan("order.created", .{
@@ -319,7 +312,6 @@ fn runMessageQueueScenario(setup: *TraceSetup) !void {
 
     try processing_span.addEvent(.{
         .name = "order.processing.started",
-        .timestamp_ns = 0,
         .attributes = &.{
             .{ .key = "inventory.change", .value = .{ .int = -3 } },
         },
@@ -332,7 +324,7 @@ fn runMessageQueueScenario(setup: *TraceSetup) !void {
     print("✅ Message queue scenario completed\n", .{});
 }
 
-fn runConcurrentOperationsScenario(allocator: std.mem.Allocator, setup: *TraceSetup) !void {
+fn runConcurrentOperationsScenario(io: std.Io, allocator: std.mem.Allocator, setup: *TraceSetup) !void {
     print("\n🔄 Concurrent Operations Scenario\n", .{});
     print("-" ** 30 ++ "\n", .{});
 
@@ -373,8 +365,8 @@ fn runConcurrentOperationsScenario(allocator: std.mem.Allocator, setup: *TraceSe
         defer db_span.deinit();
 
         // Simulate varying query times
-        const sleep_time = (i + 1) * 2 * std.time.ns_per_ms;
-        std.Thread.sleep(sleep_time);
+        const sleep_ns: u64 = (i + 1) * 2 * std.time.ns_per_ms;
+        try std.Io.sleep(io, .{ .nanoseconds = sleep_ns }, .awake);
 
         db_span.setAttribute(.{ .key = "db.rows_affected", .value = .{ .int = 1 } });
         db_span.setAttribute(.{ .key = "query.duration_ms", .value = .{ .int = @intCast((i + 1) * 2) } });
@@ -405,7 +397,7 @@ fn runPerformanceTestScenario(setup: *TraceSetup) !void {
     var perf_span = perf_result;
     defer perf_span.deinit();
 
-    const start_time = std.time.milliTimestamp();
+    const start_instant = try std.time.Instant.now();
 
     // Create many short-lived spans to test overhead
     var i: i32 = 0;
@@ -428,15 +420,14 @@ fn runPerformanceTestScenario(setup: *TraceSetup) !void {
         fast_span.end(null);
     }
 
-    const end_time = std.time.nanoTimestamp();
-    const duration_ns = end_time - start_time;
+    const end_instant = try std.time.Instant.now();
+    const duration_ns: i64 = @intCast(end_instant.since(start_instant));
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
 
     perf_span.setAttribute(.{ .key = "test.duration_ms", .value = .{ .float = duration_ms } });
     perf_span.setAttribute(.{ .key = "test.avg_span_creation_ns", .value = .{ .int = @intCast(@divTrunc(duration_ns, 10)) } });
     try perf_span.addEvent(.{
         .name = "performance.measurement.completed",
-        .timestamp_ns = 0,
         .attributes = &.{
             .{ .key = "measurement.accuracy", .value = .{ .string = "nanosecond" } },
         },

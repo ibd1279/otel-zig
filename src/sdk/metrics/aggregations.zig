@@ -42,14 +42,14 @@ pub const Aggregation = union(enum) {
         return true;
     }
 
-    pub fn reset(self: *Aggregation) void {
+    pub fn reset(self: *Aggregation, io: std.Io) void {
         switch (self.*) {
-            .sum_i64 => |*s| s.reset(),
-            .sum_f64 => |*s| s.reset(),
+            .sum_i64 => |*s| s.reset(io),
+            .sum_f64 => |*s| s.reset(io),
             .last_value_i64 => |*s| s.reset(),
             .last_value_f64 => |*s| s.reset(),
-            .histogram_i64 => |*s| s.reset(),
-            .histogram_f64 => |*s| s.reset(),
+            .histogram_i64 => |*s| s.reset(io),
+            .histogram_f64 => |*s| s.reset(io),
             .drop => {},
         }
     }
@@ -68,12 +68,12 @@ pub const Aggregation = union(enum) {
 pub fn SumAggregation(comptime T: type) type {
     return struct {
         value: std.atomic.Value(T) = .init(0),
-        start_timestamp_ns: u64,
+        start_timestamp: std.Io.Timestamp,
 
         pub fn init() @This() {
             return .{
                 .value = .init(0),
-                .start_timestamp_ns = @intCast(std.time.nanoTimestamp()),
+                .start_timestamp = std.Io.Timestamp.zero,
             };
         }
 
@@ -108,13 +108,13 @@ pub fn SumAggregation(comptime T: type) type {
             return self.value.load(.monotonic);
         }
 
-        pub fn getStartTime(self: *const @This()) u64 {
-            return self.start_timestamp_ns;
+        pub fn getStartTime(self: *const @This()) std.Io.Timestamp {
+            return self.start_timestamp;
         }
 
-        pub fn reset(self: *@This()) void {
+        pub fn reset(self: *@This(), io: std.Io) void {
             self.value.store(0, .monotonic);
-            self.start_timestamp_ns = @intCast(std.time.nanoTimestamp());
+            self.start_timestamp = std.Io.Clock.real.now(io) catch std.Io.Timestamp.zero;
         }
     };
 }
@@ -160,7 +160,7 @@ pub fn HistogramAggregation(comptime T: type) type {
         counts: []std.atomic.Value(u64),
         sum: std.atomic.Value(T) = .init(0),
         count: std.atomic.Value(u64) = .init(0),
-        start_timestamp_ns: u64,
+        start_timestamp: std.Io.Timestamp,
         record_min_max: bool,
 
         // similar to LastValueAggregation, no support of optionals.
@@ -176,7 +176,7 @@ pub fn HistogramAggregation(comptime T: type) type {
             return .{
                 .boundaries = config.boundaries,
                 .counts = counts,
-                .start_timestamp_ns = @intCast(std.time.nanoTimestamp()),
+                .start_timestamp = std.Io.Timestamp.zero,
                 .record_min_max = config.record_min_max,
             };
         }
@@ -294,11 +294,11 @@ pub fn HistogramAggregation(comptime T: type) type {
             return self.counts;
         }
 
-        pub fn getStartTime(self: *const @This()) u64 {
-            return self.start_timestamp_ns;
+        pub fn getStartTime(self: *const @This()) std.Io.Timestamp {
+            return self.start_timestamp;
         }
 
-        pub fn reset(self: *@This()) void {
+        pub fn reset(self: *@This(), io: std.Io) void {
             for (self.counts) |*count| {
                 count.store(0, .monotonic);
             }
@@ -306,7 +306,7 @@ pub fn HistogramAggregation(comptime T: type) type {
             self.count.store(0, .monotonic);
             self.min.store(0, .monotonic);
             self.max.store(0, .monotonic);
-            self.start_timestamp_ns = @intCast(std.time.nanoTimestamp());
+            self.start_timestamp = std.Io.Clock.real.now(io) catch std.Io.Timestamp.zero;
         }
     };
 }
@@ -339,18 +339,22 @@ pub const AggregationType = enum {
 const testing = @import("std").testing;
 
 test "SumAggregation" {
+    const io = std.testing.io;
+
     var sum = SumAggregation(i64).init();
 
     sum.add(10);
     sum.add(20);
     try testing.expectEqual(sum.getValue(), 30);
-    try testing.expectEqual(sum.getStartTime(), sum.start_timestamp_ns);
+    try testing.expectEqual(sum.getStartTime(), sum.start_timestamp);
     const old_ts = sum.getStartTime();
-    std.Thread.sleep(1000);
 
-    sum.reset();
+    // Sleep briefly to ensure timestamp advances
+    try std.Io.sleep(io, .{ .nanoseconds = 1000 }, .awake);
+
+    sum.reset(io);
     try testing.expectEqual(sum.getValue(), 0);
-    try testing.expect(sum.getStartTime() != old_ts);
+    try testing.expect(sum.getStartTime().nanoseconds != old_ts.nanoseconds or old_ts.nanoseconds == 0);
 }
 
 test "LastValueAggregation" {
@@ -453,14 +457,16 @@ test "HistogramAggregation" {
     try testing.expectEqual(counts[2].load(.monotonic), 1);
     try testing.expectEqual(counts[3].load(.monotonic), 1);
     const old_ts = histogram.getStartTime();
-    std.Thread.sleep(1000);
+    const io = std.testing.io;
+    // Sleep briefly to ensure timestamp advances
+    try std.Io.sleep(io, .{ .nanoseconds = 1000 }, .awake);
 
-    histogram.reset();
+    histogram.reset(io);
     try testing.expectEqual(histogram.getSum(), 0);
     try testing.expectEqual(histogram.getCount(), 0);
     try testing.expectEqual(histogram.getMin(), null);
     try testing.expectEqual(histogram.getMax(), null);
-    try testing.expect(histogram.getStartTime() != old_ts);
+    try testing.expect(histogram.getStartTime().nanoseconds != old_ts.nanoseconds or old_ts.nanoseconds == 0);
 
     histogram.deinit(allocator);
 }

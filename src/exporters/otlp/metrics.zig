@@ -115,11 +115,11 @@ pub const OtlpMetricExporter = struct {
     }
 
     fn sendRequest(self: *OtlpMetricExporter, allocator: std.mem.Allocator, metrics_data: metrics_v1.MetricsData) !void {
-        var client = std.http.Client{ .allocator = allocator };
+        var client = std.http.Client{ .allocator = allocator, .io = self.config.io };
         defer client.deinit();
 
         // Serialize to binary protobuf
-        var buffer = std.io.Writer.Allocating.init(allocator);
+        var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
         try metrics_data.encode(&buffer.writer, allocator);
         const protobuf_bytes = try buffer.toOwnedSlice();
@@ -308,8 +308,8 @@ fn convertNumberDataPoints(allocator: std.mem.Allocator, data_points: []const Me
 
     for (data_points) |dp| {
         var ndp = metrics_v1.NumberDataPoint{
-            .time_unix_nano = dp.timestamp_ns,
-            .start_time_unix_nano = dp.start_timestamp_ns orelse 0,
+            .time_unix_nano = @intCast(dp.timestamp.toNanoseconds()),
+            .start_time_unix_nano = if (dp.start_timestamp) |ts| @intCast(ts.toNanoseconds()) else 0,
         };
 
         // Convert attributes
@@ -337,8 +337,8 @@ fn convertHistogramDataPoints(allocator: std.mem.Allocator, data_points: []const
 
     for (data_points) |dp| {
         var hdp = metrics_v1.HistogramDataPoint{
-            .time_unix_nano = dp.timestamp_ns,
-            .start_time_unix_nano = dp.start_timestamp_ns orelse 0,
+            .time_unix_nano = @intCast(dp.timestamp.toNanoseconds()),
+            .start_time_unix_nano = if (dp.start_timestamp) |ts| @intCast(ts.toNanoseconds()) else 0,
         };
 
         // Convert attributes
@@ -416,8 +416,8 @@ test "convertToOtlpFormat with histogram" {
 
     const data_point = otel_sdk.metrics.MetricDataPoint{
         .attributes = &[_]otel_api.common.AttributeKeyValue{},
-        .timestamp_ns = 1234567890,
-        .start_timestamp_ns = 1234567000,
+        .timestamp = std.Io.Timestamp.fromNanoseconds(1234567890),
+        .start_timestamp = std.Io.Timestamp.fromNanoseconds(1234567000),
         .value = .{ .f64_histogram = histogram },
     };
 

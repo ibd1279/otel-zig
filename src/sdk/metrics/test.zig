@@ -40,7 +40,7 @@ test "BasicMeterProvider lifecycle" {
 
     // Create resource
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     try testing.expect(provider.readers.items.len == 0);
@@ -52,7 +52,7 @@ test "BasicMeterProvider meter caching" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const scope1 = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
@@ -76,11 +76,11 @@ test "BasicMeterProvider processor registration" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     try @import("../common/pipeline.zig").PipelineBuilder(*sdk.MeterProvider).init(&provider)
-        .with(sdk.ManualReader.PipelineStep.init({}).flowTo(MockMetricExporter.PipelineStep.init({})))
+        .with(sdk.ManualReader.PipelineStep.init(.{ .io = std.testing.io }).flowTo(MockMetricExporter.PipelineStep.init({})))
         .done();
 
     try testing.expectEqual(@as(usize, 1), provider.readers.items.len);
@@ -91,7 +91,7 @@ test "BasicMeter instrument creation and data collection" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
@@ -125,7 +125,7 @@ test "BasicMeter data collection through processor pipeline" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     // Create mock exporter
@@ -135,7 +135,7 @@ test "BasicMeter data collection through processor pipeline" {
 
     // Create processor (heap-allocated)
     const reader = try allocator.create(sdk.ManualReader);
-    reader.* = try sdk.ManualReader.init(allocator, mock_exporter.metricExporter());
+    reader.* = try sdk.ManualReader.init(allocator, std.testing.io, mock_exporter.metricExporter());
 
     // Register reader (provider takes ownership)
     try provider.registerReader(reader.reader());
@@ -181,7 +181,7 @@ test "BasicMeter shutdown behavior" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
@@ -230,14 +230,14 @@ test "BasicMeterProvider flush behavior" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const mock_exporter = try allocator.create(MockMetricExporter);
     mock_exporter.* = MockMetricExporter.init(allocator);
 
     const reader = try allocator.create(sdk.ManualReader);
-    reader.* = try sdk.ManualReader.init(allocator, mock_exporter.metricExporter());
+    reader.* = try sdk.ManualReader.init(allocator, std.testing.io, mock_exporter.metricExporter());
 
     try provider.registerReader(reader.reader());
 
@@ -256,7 +256,7 @@ test "BasicMeter comprehensive instrument test with attributes" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
@@ -310,7 +310,7 @@ test "BasicMeter instrument creation after shutdown returns noop instruments" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
@@ -348,7 +348,7 @@ test "PeriodicReader with multiple instruments" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     // Create mock exporter
@@ -358,7 +358,7 @@ test "PeriodicReader with multiple instruments" {
 
     // Create periodic reader with 100ms interval
     const reader = try allocator.create(sdk.PeriodicReader);
-    reader.* = try sdk.PeriodicReader.init(allocator, mock_exporter.metricExporter(), 100);
+    reader.* = try sdk.PeriodicReader.init(allocator, std.testing.io, mock_exporter.metricExporter(), 100);
 
     // Register reader (provider takes ownership)
     try provider.registerReader(reader.reader());
@@ -416,7 +416,7 @@ test "PeriodicReader with multiple instruments" {
     }
 
     // Wait for periodic collection to happen (simulate time passing)
-    std.Thread.sleep(200 * std.time.ns_per_ms);
+    try std.Io.sleep(std.testing.io, .{ .nanoseconds = 200 * std.time.ns_per_ms }, .awake);
 
     // Force a final collection
     reader.collect();
@@ -463,7 +463,7 @@ test "Meter returns same instrument pointer for identical instruments" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
@@ -494,14 +494,14 @@ test "Histogram uses advisory explicit bucket boundaries" {
     const allocator = testing.allocator;
 
     const resource = try sdk.Resource.initOwned(allocator, .default);
-    var provider = sdk.MeterProvider.init(allocator, resource);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
     defer provider.deinit();
 
     const mock_exporter = try allocator.create(MockMetricExporter);
     mock_exporter.* = MockMetricExporter.init(allocator);
 
     const reader = try allocator.create(sdk.ManualReader);
-    reader.* = try sdk.ManualReader.init(allocator, mock_exporter.metricExporter());
+    reader.* = try sdk.ManualReader.init(allocator, std.testing.io, mock_exporter.metricExporter());
 
     try provider.registerReader(reader.reader());
 
@@ -564,14 +564,14 @@ test "Advisory attributes filtering with and without views" {
     // Part 1: Test advisory attributes without views
     {
         const resource = try sdk.Resource.initOwned(allocator, .default);
-        var provider = sdk.MeterProvider.init(allocator, resource);
+        var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
         defer provider.deinit();
 
         const mock_exporter = try allocator.create(MockMetricExporter);
         mock_exporter.* = MockMetricExporter.init(allocator);
 
         const reader = try allocator.create(sdk.ManualReader);
-        reader.* = try sdk.ManualReader.init(allocator, mock_exporter.metricExporter());
+        reader.* = try sdk.ManualReader.init(allocator, std.testing.io, mock_exporter.metricExporter());
 
         try provider.registerReader(reader.reader());
 
@@ -632,7 +632,7 @@ test "Advisory attributes filtering with and without views" {
     // Part 2: Test with a view that overrides advisory params
     {
         const resource = try sdk.Resource.initOwned(allocator, .default);
-        var provider = sdk.MeterProvider.init(allocator, resource);
+        var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
         defer provider.deinit();
 
         // Register a view that filters to only "user_id"
@@ -650,7 +650,7 @@ test "Advisory attributes filtering with and without views" {
         mock_exporter.* = MockMetricExporter.init(allocator);
 
         const reader = try allocator.create(sdk.ManualReader);
-        reader.* = try sdk.ManualReader.init(allocator, mock_exporter.metricExporter());
+        reader.* = try sdk.ManualReader.init(allocator, std.testing.io, mock_exporter.metricExporter());
 
         try provider.registerReader(reader.reader());
 

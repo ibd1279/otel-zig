@@ -4,6 +4,7 @@ const std = @import("std");
 const api = @import("otel-api");
 const sdk = @import("otel-sdk");
 
+
 const exporters = struct {
     const stream = struct {
         const SinkConfig = @import("config.zig");
@@ -92,10 +93,10 @@ pub fn logRecordExporter(self: *LogRecordSink) sdk.logs.LogRecordExporter {
 }
 
 fn outputLogRecord(resource: sdk.resource.Resource, cfg: exporters.stream.SinkConfig, record: sdk.logs.LogRecord) !void {
-    const timestamp_ns = record.timestamp_ns orelse @as(i64, @intCast(std.time.nanoTimestamp()));
     if (cfg.include_timestamp) {
+        const ts_ns = if (record.timestamp) |ts| ts.toNanoseconds() else if (record.observed_timestamp) |ts| ts.toNanoseconds() else 0;
         // Convert nanoseconds to seconds for display
-        const timestamp_s = @divTrunc(timestamp_ns, 1_000_000_000);
+        const timestamp_s = @divTrunc(ts_ns, 1_000_000_000);
         try cfg.writer.print("{d}|", .{timestamp_s});
     }
     const level = record.severity_number.toShortText();

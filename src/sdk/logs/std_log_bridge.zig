@@ -113,7 +113,7 @@ fn mapLogLevelToSeverity(level: std.log.Level) api.logs.Severity {
 /// OpenTelemetry logFn implementation
 pub fn otelLogFn(
     comptime level: std.log.Level,
-    comptime scope: @Type(.enum_literal),
+    comptime scope: @EnumLiteral(),
     comptime format: []const u8,
     args: anytype,
 ) void {
@@ -132,7 +132,7 @@ pub fn otelLogFn(
 /// Internal OTel logging implementation
 fn otelLogImpl(
     comptime level: std.log.Level,
-    comptime scope: @Type(.enum_literal),
+    comptime scope: @EnumLiteral(),
     comptime format: []const u8,
     args: anytype,
 ) !void {
@@ -164,8 +164,8 @@ fn otelLogImpl(
         severity, // severity
         .{ .string = message }, // body
         attributes, // attributes
-        @as(i64, @intCast(std.time.nanoTimestamp())), // timestamp_ns
-        null, // observed_timestamp_ns
+        null, // timestamp — SDK fills in via provider.io
+        null, // observed_timestamp
         null, // event_name
         null, // severity_text
         null, // trace_id

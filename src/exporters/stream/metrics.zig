@@ -4,6 +4,7 @@ const std = @import("std");
 const api = @import("otel-api");
 const sdk = @import("otel-sdk");
 
+
 const exporters = struct {
     const stream = struct {
         const SinkConfig = @import("config.zig");
@@ -87,10 +88,11 @@ pub fn metricsExporter(self: *MetricDataSink) sdk.metrics.MetricExporter {
 }
 
 fn outputMetricData(resource: sdk.resource.Resource, cfg: exporters.stream.SinkConfig, metric: sdk.metrics.MetricData) !void {
-    const timestamp_ns: i64 = @intCast(std.time.nanoTimestamp());
     if (cfg.include_timestamp) {
+        // Use the first data point's timestamp if available, else 0
+        const ts_ns: i64 = @truncate(if (metric.data_points.len > 0) metric.data_points[0].timestamp.toNanoseconds() else 0);
         // Convert nanoseconds to seconds for display
-        const timestamp_s = @divTrunc(timestamp_ns, 1_000_000_000);
+        const timestamp_s = @divTrunc(ts_ns, 1_000_000_000);
         try cfg.writer.print("{d}|", .{timestamp_s});
     }
     const level = "METER";
@@ -99,9 +101,9 @@ fn outputMetricData(resource: sdk.resource.Resource, cfg: exporters.stream.SinkC
     // Datapoints
     for (metric.data_points) |point| {
         if (cfg.include_timestamp) {
-            if (point.start_timestamp_ns) |start_ts| {
-                try cfg.writer.print("{f}@{d}-{d} ", .{ point.value, start_ts, point.timestamp_ns });
-            } else try cfg.writer.print("{f}@{d} ", .{ point.value, point.timestamp_ns });
+            if (point.start_timestamp) |start_ts| {
+                try cfg.writer.print("{f}@{d}-{d} ", .{ point.value, start_ts.toNanoseconds(), point.timestamp.toNanoseconds() });
+            } else try cfg.writer.print("{f}@{d} ", .{ point.value, point.timestamp.toNanoseconds() });
         } else try cfg.writer.print("{f} ", .{point.value});
         if (cfg.include_attributes and point.attributes.len > 0) {
             try cfg.writer.print("| [", .{});

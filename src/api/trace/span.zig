@@ -119,12 +119,12 @@ pub const Span = union(enum) {
         self: *Span,
         exception: anyerror,
         attributes: ?[]const api.AttributeKeyValue,
-        timestamp_ns: ?i64,
+        timestamp: ?std.Io.Timestamp,
     ) !void {
         // Because this generally requires memory management, delegating to the bridge.
         switch (self.*) {
             .noop => {},
-            .bridge => |bridge| try bridge.recordExceptionFn(bridge.span_ptr, exception, attributes, timestamp_ns),
+            .bridge => |bridge| try bridge.recordExceptionFn(bridge.span_ptr, exception, attributes, timestamp),
         }
     }
 
@@ -137,9 +137,9 @@ pub const Span = union(enum) {
         switch (self.*) {
             .noop => {},
             .bridge => |*bridge| {
-                if (bridge.end_ns == null) {
-                    const default_ts: i64 = @intCast(std.time.nanoTimestamp());
-                    bridge.end_ns = if (options) |opts| opts.end_time_ns orelse default_ts else default_ts;
+                if (bridge.end_time == null) {
+                    // end_time = null signals the SDK to use its io clock.
+                    bridge.end_time = if (options) |opts| opts.end_time else null;
                     bridge.endFn(bridge.span_ptr, bridge.*, options);
                 }
             },
@@ -157,9 +157,9 @@ pub const Span = union(enum) {
         /// Links to other spans
         links: []const Link = &.{},
 
-        /// Custom start time in nanoseconds since Unix epoch
+        /// Custom start time.
         /// If null, current time will be used
-        start_time_ns: ?i64 = null,
+        start_time: ?std.Io.Timestamp = null,
 
         /// Whether this span should be recorded even if not sampled
         /// This affects the IsRecording flag
@@ -174,9 +174,9 @@ pub const Span = union(enum) {
 
     /// SpanEndOptions defines configuration options for ending a span
     pub const EndOptions = struct {
-        /// Custom end time in nanoseconds since Unix epoch
+        /// Custom end time.
         /// If null, current time will be used when the span is ended
-        end_time_ns: ?i64 = null,
+        end_time: ?std.Io.Timestamp = null,
 
         /// Create default span end options
         pub const default: EndOptions = .{};
@@ -309,7 +309,7 @@ test "wrapSpanContext creates non-recording span" {
     wrapped_span.setAttribute(.{ .key = "key", .value = .{ .string = "value" } });
     try wrapped_span.addEvent(Span.Event{
         .name = "test",
-        .timestamp_ns = 0,
+        .timestamp = std.Io.Timestamp.zero,
         .attributes = &.{},
     });
     wrapped_span.setStatus(.{ .code = .ok });

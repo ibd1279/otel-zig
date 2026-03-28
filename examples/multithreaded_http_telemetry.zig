@@ -56,7 +56,7 @@ const SharedState = struct {
     should_stop: std.atomic.Value(bool),
     server_address: []const u8,
     server_port: u16,
-    start_time_ns: i128, // For uptime calculation
+    start_instant: std.time.Instant, // For uptime calculation
     error_count: std.atomic.Value(u32), // Track errors across threads
 
     const Self = @This();
@@ -67,7 +67,7 @@ const SharedState = struct {
             .should_stop = std.atomic.Value(bool).init(false),
             .server_address = "127.0.0.1",
             .server_port = port,
-            .start_time_ns = std.time.nanoTimestamp(),
+            .start_instant = std.time.Instant.now() catch unreachable,
             .error_count = std.atomic.Value(u32).init(0),
         };
     }
@@ -80,8 +80,9 @@ const SharedState = struct {
         return self.should_stop.load(.monotonic);
     }
 
-    pub fn getUptimeNs(self: *Self) i128 {
-        return std.time.nanoTimestamp() - self.start_time_ns;
+    pub fn getUptimeNs(self: *Self) u64 {
+        const now = std.time.Instant.now() catch return 0;
+        return now.since(self.start_instant);
     }
 
     pub fn incrementErrorCount(self: *Self) void {
@@ -164,7 +165,7 @@ fn uptimeCallback(allocator: std.mem.Allocator, result: *otel_api.metrics.Observ
     });
 }
 
-fn numberReaderThread(shared_state: *SharedState, config: Config) !void {
+fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !void {
     // Get instrumentation scope for the reader thread
     const reader_scope = otel_api.InstrumentationScope{ .name = "multithreaded-http-telemetry/number-reader", .version = "1.0.0" };
     var logger = try otel_api.getGlobalLoggerProvider().getLoggerWithScope(reader_scope);
@@ -219,16 +220,21 @@ fn numberReaderThread(shared_state: *SharedState, config: Config) !void {
         null, // event_name
     );
 
-    const start_time = std.time.milliTimestamp();
+    const loop_start = std.time.Instant.now() catch unreachable;
+    const duration_ns: u64 = @as(u64, config.duration_seconds) * std.time.ns_per_s;
+    var prng = std.Random.DefaultPrng.init(@intCast(loop_start.since(shared_state.start_instant)));
+    const rand = prng.random();
     var iteration: u32 = 0;
     var previous_span_context: ?otel_api.trace.Span.Context = null;
 
-    while (!shared_state.shouldStop() and (std.time.milliTimestamp() - start_time) < (@as(i64, config.duration_seconds) * 1000)) {
+    while (!shared_state.shouldStop()) {
+        const now = std.time.Instant.now() catch break;
+        if (now.since(loop_start) >= duration_ns) break;
         iteration += 1;
 
         // Generate two random 16-bit numbers
-        const num1: u16 = std.crypto.random.int(u16);
-        const num2: u16 = std.crypto.random.int(u16);
+        const num1: u16 = rand.int(u16);
+        const num2: u16 = rand.int(u16);
 
         // Record metrics - these will be processed by multiple views
         const ctx = &[_]otel_api.context.ContextKeyValue{};
@@ -273,7 +279,6 @@ fn numberReaderThread(shared_state: *SharedState, config: Config) !void {
         // Add event to mark number generation and link status
         try root_span.addEvent(.{
             .name = "numbers_generated",
-            .timestamp_ns = @intCast(std.time.nanoTimestamp()),
             .attributes = &[_]otel_api.common.AttributeKeyValue{
                 .{ .key = "num1", .value = .{ .int = @intCast(num1) } },
                 .{ .key = "num2", .value = .{ .int = @intCast(num2) } },
@@ -311,7 +316,6 @@ fn numberReaderThread(shared_state: *SharedState, config: Config) !void {
         // Add event for request start
         try http_span.addEvent(.{
             .name = "request.start",
-            .timestamp_ns = @intCast(std.time.nanoTimestamp()),
             .attributes = &[_]otel_api.common.AttributeKeyValue{
                 .{ .key = otel_semconv.trace.HTTP_TARGET, .value = .{ .string = url } },
             },
@@ -331,7 +335,7 @@ fn numberReaderThread(shared_state: *SharedState, config: Config) !void {
         defer http_context.deinit();
 
         // Call the server.
-        processHttpRequest(child_ctx, &http_context, &logger, shared_state.allocator);
+        processHttpRequest(child_ctx, &http_context, &logger, shared_state.allocator, io);
 
         // Increment error count if server returned an error
         if (http_context.status_code >= 400) {
@@ -341,7 +345,6 @@ fn numberReaderThread(shared_state: *SharedState, config: Config) !void {
         // Add response event (status code will be set by server processing)
         try http_span.addEvent(.{
             .name = "response.received",
-            .timestamp_ns = @intCast(std.time.nanoTimestamp()),
             .attributes = &[_]otel_api.common.AttributeKeyValue{
                 .{ .key = otel_semconv.trace.HTTP_STATUS_CODE, .value = .{ .int = @intCast(http_context.status_code) } },
                 .{ .key = "response.result", .value = .{ .int = @intCast(http_context.result) } },
@@ -357,7 +360,6 @@ fn numberReaderThread(shared_state: *SharedState, config: Config) !void {
             // Add error event
             try http_span.addEvent(.{
                 .name = "error",
-                .timestamp_ns = @intCast(std.time.nanoTimestamp()),
                 .attributes = &[_]otel_api.common.AttributeKeyValue{
                     .{ .key = otel_semconv.exception.EXCEPTION_TYPE, .value = .{ .string = "server_error" } },
                     .{ .key = otel_semconv.exception.EXCEPTION_MESSAGE, .value = .{ .string = "Server returned 500: multiplication overflow" } },
@@ -413,7 +415,7 @@ fn numberReaderThread(shared_state: *SharedState, config: Config) !void {
     );
 }
 
-fn httpServerThread(shared_state: *SharedState, config: Config) !void {
+fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !void {
     _ = config; // Config not used in server thread, only in reader thread
 
     std.debug.print("http server thread starting\n", .{});
@@ -430,6 +432,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
 
     var logger_provider = otel_sdk.logs.LoggerProvider.init(
         shared_state.allocator,
+        io,
         try otel_sdk.resource.Resource.initOwned(shared_state.allocator, core_resource),
     );
     logger_provider.default_min_severity = .warn;
@@ -437,7 +440,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
     {
         const exporter = try shared_state.allocator.create(otel_exporters.otlp.OtlpLogExporter);
         errdefer shared_state.allocator.destroy(exporter);
-        exporter.* = otel_exporters.otlp.OtlpLogExporter.init(shared_state.allocator, .{});
+        exporter.* = otel_exporters.otlp.OtlpLogExporter.init(shared_state.allocator, .{ .io = io });
         errdefer exporter.deinit();
         const processor = try otel_sdk.logs.BatchLogRecordProcessor.init(shared_state.allocator, exporter.logRecordExporter(), 5000, 5000);
         errdefer processor.deinit();
@@ -447,23 +450,25 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
 
     var meter_provider = otel_sdk.metrics.MeterProvider.init(
         shared_state.allocator,
+        io,
         try otel_sdk.resource.Resource.initOwned(shared_state.allocator, core_resource),
     );
     defer meter_provider.deinit();
     {
         const exporter = try shared_state.allocator.create(otel_exporters.otlp.OtlpMetricExporter);
         errdefer shared_state.allocator.destroy(exporter);
-        exporter.* = otel_exporters.otlp.OtlpMetricExporter.init(shared_state.allocator, .{});
+        exporter.* = otel_exporters.otlp.OtlpMetricExporter.init(shared_state.allocator, .{ .io = io });
         errdefer exporter.deinit();
         const reader = try shared_state.allocator.create(otel_sdk.metrics.PeriodicReader);
         errdefer shared_state.allocator.destroy(reader);
-        reader.* = try otel_sdk.metrics.PeriodicReader.init(shared_state.allocator, exporter.metricsExporter(), 5000);
+        reader.* = try otel_sdk.metrics.PeriodicReader.init(shared_state.allocator, io, exporter.metricsExporter(), 5000);
         errdefer reader.deinit();
         try reader.start();
         try meter_provider.registerReader(reader.reader());
     }
     var tracer_provider = otel_sdk.trace.TracerProvider.init(
         shared_state.allocator,
+        io,
         try otel_sdk.resource.Resource.initOwned(shared_state.allocator, core_resource),
         otel_sdk.trace.createDefaultIdGenerator(),
         otel_sdk.trace.samplers.parentBased(otel_sdk.trace.samplers.traceIdRatioBased(0.5)),
@@ -472,7 +477,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
     {
         const exporter = try shared_state.allocator.create(otel_exporters.otlp.OtlpTraceExporter);
         errdefer shared_state.allocator.destroy(exporter);
-        exporter.* = otel_exporters.otlp.OtlpTraceExporter.init(shared_state.allocator, .{});
+        exporter.* = otel_exporters.otlp.OtlpTraceExporter.init(shared_state.allocator, .{ .io = io });
         errdefer exporter.deinit();
         const processor = try shared_state.allocator.create(otel_sdk.trace.BatchSpanProcessor);
         errdefer shared_state.allocator.destroy(processor);
@@ -503,7 +508,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
     var request_id: u32 = 0;
 
     // Create and bind socket
-    const address = std.net.Address.parseIp(shared_state.server_address, shared_state.server_port) catch |err| {
+    const address = std.Io.net.IpAddress.parseIp4(shared_state.server_address, shared_state.server_port) catch |err| {
         logger.emitLog(
             &.{},
             .@"error",
@@ -518,7 +523,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
         return;
     };
 
-    var server = address.listen(.{ .reuse_address = true, .force_nonblocking = true }) catch |err| {
+    var server = address.listen(io, .{ .reuse_address = true }) catch |err| {
         logger.emitLog(
             &.{},
             .@"error",
@@ -532,6 +537,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
         );
         return;
     };
+    defer server.deinit(io);
 
     logger.emitLog(
         &.{},
@@ -551,9 +557,9 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
     // Accept connections loop
     while (!shared_state.shouldStop()) {
         // Set a timeout for accept to periodically check shouldStop
-        const connection = server.accept() catch |err| switch (err) {
+        const stream = server.accept(io) catch |err| switch (err) {
             error.WouldBlock => {
-                std.Thread.sleep(std.time.ns_per_ms * 10);
+                std.Io.sleep(io, .{ .nanoseconds = std.time.ns_per_ms * 10 }, .awake) catch {};
                 continue;
             },
             else => {
@@ -569,7 +575,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
                 continue;
             },
         };
-        defer connection.stream.close();
+        defer stream.close(io);
 
         request_id += 1;
         request_instrument.add(&.{}, 1, &.{});
@@ -587,11 +593,11 @@ fn httpServerThread(shared_state: *SharedState, config: Config) !void {
 
         // Read and parse the HTTP request
         var read_buffer = [_]u8{0} ** 4096;
-        var reader = connection.stream.reader(&read_buffer);
+        var reader = stream.reader(io, &read_buffer);
         var write_buffer = [_]u8{0} ** 512;
-        var writer = connection.stream.writer(&write_buffer);
+        var writer = stream.writer(io, &write_buffer);
         var http_server = std.http.Server.init(
-            reader.interface(),
+            &reader.interface,
             &writer.interface,
         );
         var request = http_server.receiveHead() catch |err| {
@@ -775,9 +781,16 @@ fn printUsage() void {
     print("\n", .{});
 }
 
-fn parseArgs(allocator: Allocator) !Config {
-    const args = try std.process.argsAlloc(allocator);
-    defer std.process.argsFree(allocator, args);
+fn parseArgs(allocator: Allocator, process_args: std.process.Args) !Config {
+    var it = try process_args.iterateAllocator(allocator);
+    defer it.deinit();
+
+    var args: std.ArrayList([]const u8) = .empty;
+    defer args.deinit(allocator);
+    while (it.next()) |arg| {
+        try args.append(allocator, try allocator.dupe(u8, arg));
+    }
+    defer for (args.items) |arg| allocator.free(arg);
 
     var config = Config{
         .exporter_type = .console, // Default to console
@@ -785,33 +798,33 @@ fn parseArgs(allocator: Allocator) !Config {
         .sampling_ratio = 1.0, // Default to 100% sampling
     };
 
-    if (args.len > 4) {
+    if (args.items.len > 4) {
         print("❌ Error: Too many arguments\n\n", .{});
         printUsage();
         std.process.exit(1);
     }
 
     // Handle help option
-    if (args.len >= 2 and (std.mem.eql(u8, args[1], "--help") or std.mem.eql(u8, args[1], "-h"))) {
+    if (args.items.len >= 2 and (std.mem.eql(u8, args.items[1], "--help") or std.mem.eql(u8, args.items[1], "-h"))) {
         printUsage();
         std.process.exit(0);
     }
 
     // Parse exporter type (first argument)
-    if (args.len >= 2) {
-        if (ExporterType.fromString(args[1])) |exporter_type| {
+    if (args.items.len >= 2) {
+        if (ExporterType.fromString(args.items[1])) |exporter_type| {
             config.exporter_type = exporter_type;
         } else {
-            print("❌ Error: Invalid exporter type '{s}'. Use 'console' or 'otlp'\n\n", .{args[1]});
+            print("❌ Error: Invalid exporter type '{s}'. Use 'console' or 'otlp'\n\n", .{args.items[1]});
             printUsage();
             std.process.exit(1);
         }
     }
 
     // Parse duration (second argument)
-    if (args.len >= 3) {
-        config.duration_seconds = std.fmt.parseInt(u32, args[2], 10) catch {
-            print("❌ Error: Invalid duration '{s}'. Must be a positive integer\n\n", .{args[2]});
+    if (args.items.len >= 3) {
+        config.duration_seconds = std.fmt.parseInt(u32, args.items[2], 10) catch {
+            print("❌ Error: Invalid duration '{s}'. Must be a positive integer\n\n", .{args.items[2]});
             printUsage();
             std.process.exit(1);
         };
@@ -824,9 +837,9 @@ fn parseArgs(allocator: Allocator) !Config {
     }
 
     // Parse sampling ratio (third argument)
-    if (args.len >= 4) {
-        config.sampling_ratio = std.fmt.parseFloat(f64, args[3]) catch {
-            print("❌ Error: Invalid sampling ratio '{s}'. Must be a number between 0.0 and 1.0\n\n", .{args[3]});
+    if (args.items.len >= 4) {
+        config.sampling_ratio = std.fmt.parseFloat(f64, args.items[3]) catch {
+            print("❌ Error: Invalid sampling ratio '{s}'. Must be a number between 0.0 and 1.0\n\n", .{args.items[3]});
             printUsage();
             std.process.exit(1);
         };
@@ -841,13 +854,12 @@ fn parseArgs(allocator: Allocator) !Config {
     return config;
 }
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Parse command-line arguments
-    const config = try parseArgs(allocator);
+    const config = try parseArgs(allocator, init.minimal.args);
 
     print("🚀 Starting Comprehensive Multi-threaded OpenTelemetry Example\n", .{});
     print("=" ** 70 ++ "\n", .{});
@@ -860,9 +872,10 @@ pub fn main() !void {
     var stderr_buffer = [_]u8{0} ** 1024;
     const log_provider = switch (config.exporter_type) {
         .console => blk: {
-            var stderr = otel_exporters.console.initStream(true, &stderr_buffer);
+            var stderr = otel_exporters.console.initStream(io, true, &stderr_buffer);
             break :blk try setupCustomLogProvider(
                 allocator,
+                io,
                 .{otel_sdk.logs.BatchLogRecordProcessor.PipelineStep.init(.{
                     .export_interval_ms = 5000, // Export logs every 2 seconds
                     .max_queue_size = 5000, // Queue up to 100 log records
@@ -871,10 +884,11 @@ pub fn main() !void {
         },
         .otlp => try setupCustomLogProvider(
             allocator,
+            io,
             .{otel_sdk.logs.BatchLogRecordProcessor.PipelineStep.init(.{
                 .export_interval_ms = 5000, // Export logs every 2 seconds
                 .max_queue_size = 5000, // Queue up to 100 log records
-            }).flowTo(otel_exporters.otlp.OtlpLogExporter.PipelineStep.init(.{}))},
+            }).flowTo(otel_exporters.otlp.OtlpLogExporter.PipelineStep.init(.{ .io = io }))},
         ),
     };
     defer {
@@ -911,19 +925,20 @@ pub fn main() !void {
     const metric_provider = switch (config.exporter_type) {
         .console => blk: {
             var stderr_buffer2 = [_]u8{0} ** 1024;
-            const stderr_fh2 = std.fs.File.stderr();
-            var stderr2 = stderr_fh2.writer(&stderr_buffer2);
+            var stderr2 = std.Io.File.stderr().writer(io, &stderr_buffer2);
             break :blk try setupCustomMetricProvider(
                 allocator,
-                .{otel_sdk.metrics.PeriodicReader.PipelineStep.init(5000) // Export metrics every 5 seconds
+                io,
+                .{otel_sdk.metrics.PeriodicReader.PipelineStep.init(.{ .io = io, .interval_ms = 5000 }) // Export metrics every 5 seconds
                     .flowTo(otel_exporters.stream.MetricDataSink.PipelineStep.init(.{ .writer = &stderr2.interface }))},
                 metric_views,
             );
         },
         .otlp => try setupCustomMetricProvider(
             allocator,
-            .{otel_sdk.metrics.PeriodicReader.PipelineStep.init(5000) // Export metrics every 5 seconds
-                .flowTo(otel_exporters.otlp.OtlpMetricExporter.PipelineStep.init(.{}))},
+            io,
+            .{otel_sdk.metrics.PeriodicReader.PipelineStep.init(.{ .io = io, .interval_ms = 5000 }) // Export metrics every 5 seconds
+                .flowTo(otel_exporters.otlp.OtlpMetricExporter.PipelineStep.init(.{ .io = io }))},
             metric_views,
         ),
     };
@@ -936,10 +951,10 @@ pub fn main() !void {
     const trace_provider = switch (config.exporter_type) {
         .console => blk: {
             var stderr_buffer3 = [_]u8{0} ** 1024;
-            const stderr_fh3 = std.fs.File.stderr();
-            var stderr3 = stderr_fh3.writer(&stderr_buffer3);
+            var stderr3 = std.Io.File.stderr().writer(io, &stderr_buffer3);
             break :blk try setupCustomTraceProvider(
                 allocator,
+                io,
                 config.sampling_ratio,
                 .{otel_sdk.trace.BatchSpanProcessor.PipelineStep.init(.{
                     .export_interval_ms = 5000, // Export spans every 3 seconds
@@ -949,11 +964,12 @@ pub fn main() !void {
         },
         .otlp => try setupCustomTraceProvider(
             allocator,
+            io,
             config.sampling_ratio,
             .{otel_sdk.trace.BatchSpanProcessor.PipelineStep.init(.{
                 .export_interval_ms = 5000, // Export spans every 3 seconds
                 .max_queue_size = 5000, // Queue up to 50 spans
-            }).flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{}))},
+            }).flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{ .io = io }))},
         ),
     };
     defer {
@@ -994,8 +1010,8 @@ pub fn main() !void {
     print("⏰ Running for {} seconds...\n\n", .{config.duration_seconds});
 
     // Start both threads
-    const server_thread = try Thread.spawn(.{}, httpServerThread, .{ &shared_state, config });
-    const reader_thread = try Thread.spawn(.{}, numberReaderThread, .{ &shared_state, config });
+    const server_thread = try Thread.spawn(.{}, httpServerThread, .{ &shared_state, config, io });
+    const reader_thread = try Thread.spawn(.{}, numberReaderThread, .{ &shared_state, config, io });
 
     // Wait for reader thread to complete (it stops after configured duration)
     reader_thread.join();
@@ -1047,9 +1063,9 @@ pub fn main() !void {
     print("✅ Comprehensive OpenTelemetry demo completed!\n", .{});
 }
 
-fn processHttpRequest(ctx: []otel_api.ContextKeyValue, http_context: *HttpContext, logger: *otel_api.logs.Logger, allocator: std.mem.Allocator) void {
+fn processHttpRequest(ctx: []otel_api.ContextKeyValue, http_context: *HttpContext, logger: *otel_api.logs.Logger, allocator: std.mem.Allocator, io: std.Io) void {
     // Create HTTP client
-    var http_client = std.http.Client{ .allocator = allocator };
+    var http_client = std.http.Client{ .allocator = allocator, .io = io };
     defer http_client.deinit();
 
     // Build URL for the request
@@ -1160,7 +1176,7 @@ fn processHttpRequest(ctx: []otel_api.ContextKeyValue, http_context: *HttpContex
 }
 
 /// Custom trace provider setup with configurable sampling
-fn setupCustomTraceProvider(allocator: std.mem.Allocator, sampling_ratio: f64, links: anytype) !*otel_sdk.trace.TracerProvider {
+fn setupCustomTraceProvider(allocator: std.mem.Allocator, io: std.Io, sampling_ratio: f64, links: anytype) !*otel_sdk.trace.TracerProvider {
     const createDefaultIdGenerator = otel_sdk.trace.createDefaultIdGenerator;
     const samplers = otel_sdk.trace.samplers;
 
@@ -1183,6 +1199,7 @@ fn setupCustomTraceProvider(allocator: std.mem.Allocator, sampling_ratio: f64, l
     // 4. Initialize provider with custom sampler and final resource
     provider_ptr.* = otel_sdk.trace.TracerProvider.init(
         allocator,
+        io,
         final_resource,
         createDefaultIdGenerator(),
         sampler,
@@ -1204,7 +1221,7 @@ fn setupCustomTraceProvider(allocator: std.mem.Allocator, sampling_ratio: f64, l
 }
 
 /// Custom log provider setup with service name in resource
-fn setupCustomLogProvider(allocator: std.mem.Allocator, links: anytype) !*otel_sdk.logs.LoggerProvider {
+fn setupCustomLogProvider(allocator: std.mem.Allocator, io: std.Io, links: anytype) !*otel_sdk.logs.LoggerProvider {
 
     // 1. Create heap-allocated concrete provider
     const provider_ptr = try allocator.create(otel_sdk.logs.LoggerProvider);
@@ -1215,7 +1232,7 @@ fn setupCustomLogProvider(allocator: std.mem.Allocator, links: anytype) !*otel_s
     errdefer final_resource.deinitOwned(allocator);
 
     // 3. Initialize provider with service resource
-    provider_ptr.* = otel_sdk.logs.LoggerProvider.init(allocator, final_resource);
+    provider_ptr.* = otel_sdk.logs.LoggerProvider.init(allocator, io, final_resource);
     errdefer provider_ptr.deinit();
     provider_ptr.default_min_severity = .warn;
 
@@ -1234,7 +1251,7 @@ fn setupCustomLogProvider(allocator: std.mem.Allocator, links: anytype) !*otel_s
 }
 
 /// Custom metric provider setup with service name in resource
-fn setupCustomMetricProvider(allocator: std.mem.Allocator, links: anytype, views: anytype) !*otel_sdk.metrics.MeterProvider {
+fn setupCustomMetricProvider(allocator: std.mem.Allocator, io: std.Io, links: anytype, views: anytype) !*otel_sdk.metrics.MeterProvider {
 
     // 1. Create heap-allocated concrete provider
     const provider_ptr = try allocator.create(otel_sdk.metrics.MeterProvider);
@@ -1245,7 +1262,7 @@ fn setupCustomMetricProvider(allocator: std.mem.Allocator, links: anytype, views
     errdefer final_resource.deinitOwned(allocator);
 
     // 3. Initialize provider with service resource
-    provider_ptr.* = otel_sdk.metrics.MeterProvider.init(allocator, final_resource);
+    provider_ptr.* = otel_sdk.metrics.MeterProvider.init(allocator, io, final_resource);
     errdefer provider_ptr.deinit();
 
     // 4. Register views before pipeline setup

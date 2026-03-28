@@ -8,16 +8,15 @@ const otel_api = @import("otel-api");
 const otel_sdk = @import("otel-sdk");
 const otel_exporters = @import("otel-exporters");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
+    const io = init.io;
 
     // Set up trace provider using the new setupGlobalProvider pattern
     const concrete_provider = try otel_sdk.trace.setupGlobalProvider(
-        allocator,
+        init,
         .{otel_sdk.trace.BasicSpanProcessor.PipelineStep.init({})
-            .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{}))},
+            .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{ .io = io }))},
     );
     defer {
         concrete_provider.deinit();
@@ -55,7 +54,7 @@ pub fn main() !void {
     // Add an event to the parent span
     try parent_span.addEvent(otel_api.trace.Span.Event{
         .name = "request.started",
-        .timestamp_ns = 0,
+        // timestamp omitted — SDK stamps current time
         .attributes = &[_]otel_api.common.AttributeKeyValue{
             .{
                 .key = "client.ip",
@@ -85,7 +84,7 @@ pub fn main() !void {
     defer child_span.deinit();
 
     // Simulate some work
-    std.Thread.sleep(10 * std.time.ns_per_ms);
+    try std.Io.sleep(io, .{ .nanoseconds = 10 * std.time.ns_per_ms }, .awake);
 
     // Add result attribute to child span
     child_span.setAttribute(.{ .key = "db.rows_affected", .value = otel_api.common.AttributeValue{ .int = 1 } });

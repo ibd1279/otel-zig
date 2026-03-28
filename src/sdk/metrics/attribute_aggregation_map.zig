@@ -202,6 +202,7 @@ pub const AttributeAggregationMap = struct {
         self: *AttributeAggregationMap,
         allocator: std.mem.Allocator,
         entry_list: *std.ArrayList(AttributeAggregationEntry),
+        io: std.Io,
     ) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -235,7 +236,7 @@ pub const AttributeAggregationMap = struct {
             });
             entry.deinit(self.allocator);
         }
-        self.overflow_aggregation.aggregation.reset();
+        self.overflow_aggregation.aggregation.reset(io);
         self.next_free.store(0, .monotonic);
         self.aggregations.clearRetainingCapacity();
     }

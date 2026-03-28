@@ -25,6 +25,7 @@ const sdk = struct {
 /// Basic meter provider with caching and configuration
 pub const MeterProvider = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     resource: sdk.Resource,
     cache: std.HashMapUnmanaged(api.InstrumentationScope, *sdk.metrics.Meter, sdk.common.InstrumentationScopeMapContext, 80),
     readers: std.ArrayListUnmanaged(sdk.metrics.Reader),
@@ -34,10 +35,12 @@ pub const MeterProvider = struct {
 
     pub fn init(
         allocator: std.mem.Allocator,
+        io: std.Io,
         resource: sdk.Resource,
     ) MeterProvider {
         return .{
             .allocator = allocator,
+            .io = io,
             .resource = resource,
             .cache = .empty,
             .readers = .empty,

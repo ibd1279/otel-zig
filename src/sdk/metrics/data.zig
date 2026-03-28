@@ -7,9 +7,9 @@ const sdk = struct {
 /// Metric data point representing a single measurement
 pub const MetricDataPoint = struct {
     /// Timestamp when the measurement was recorded
-    timestamp_ns: u64,
+    timestamp: std.Io.Timestamp,
     /// Start timestamp for monotonic counters (null for gauges)
-    start_timestamp_ns: ?u64,
+    start_timestamp: ?std.Io.Timestamp,
     /// Attributes associated with this data point
     attributes: []const api.AttributeKeyValue,
     /// The actual value

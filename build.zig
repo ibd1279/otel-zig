@@ -55,12 +55,12 @@ pub fn build(b: *std.Build) void {
         // out directory for the generated zig files
         .destination_directory = b.path("src/exporters/otlp/proto"),
         .source_files = &.{
-            "opentelemetry-proto/opentelemetry/proto/logs/v1/logs.proto",
-            "opentelemetry-proto/opentelemetry/proto/metrics/v1/metrics.proto",
-            "opentelemetry-proto/opentelemetry/proto/trace/v1/trace.proto",
+            b.path("opentelemetry-proto/opentelemetry/proto/logs/v1/logs.proto"),
+            b.path("opentelemetry-proto/opentelemetry/proto/metrics/v1/metrics.proto"),
+            b.path("opentelemetry-proto/opentelemetry/proto/trace/v1/trace.proto"),
         },
         .include_directories = &.{
-            "opentelemetry-proto/",
+            b.path("opentelemetry-proto/"),
         },
     });
 

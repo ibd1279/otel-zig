@@ -52,6 +52,9 @@ pub const Transport = enum {
 
 // OTLP-specific configuration
 pub const OtlpExporterConfig = struct {
+    /// Io handle required for HTTP transport.
+    io: std.Io,
+
     /// OTLP receiver endpoint
     endpoint: []const u8 = "http://localhost:4318",
 

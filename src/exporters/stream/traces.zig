@@ -3,6 +3,7 @@ const std = @import("std");
 const api = @import("otel-api");
 const sdk = @import("otel-sdk");
 
+
 const exporters = struct {
     const stream = struct {
         const SinkConfig = @import("config.zig");
@@ -90,16 +91,15 @@ pub fn spanExporter(self: *SpanDataSink) sdk.trace.SpanExporter {
 }
 
 fn outputSpanData(resource: sdk.resource.Resource, cfg: exporters.stream.SinkConfig, span: sdk.trace.SpanData) !void {
-    const timestamp_ns: i64 = @intCast(std.time.nanoTimestamp());
     if (cfg.include_timestamp) {
         // Convert nanoseconds to seconds for display
-        const timestamp_s = @divTrunc(timestamp_ns, 1_000_000_000);
+        const timestamp_s = @divTrunc(span.start_time.toNanoseconds(), 1_000_000_000);
         try cfg.writer.print("{d}|", .{timestamp_s});
     }
     const level = "SPAN ";
     try cfg.writer.print("{s:<5} {s} {t} {t} ", .{ level, span.name, span.kind, span.status.code });
     if (span.status.description) |desc| try cfg.writer.print("{s} ", .{desc});
-    try cfg.writer.print("| {d}-{d} ", .{ span.start_time, span.end_time });
+    try cfg.writer.print("| {d}-{d} ", .{ span.start_time.toNanoseconds(), span.end_time.toNanoseconds() });
     if (span.parent_ctx) |parent| {
         var trace_id_buff: [api.common.TraceId.length * 2]u8 = undefined;
         span.ctx.trace_id.toHexString(&trace_id_buff);
@@ -117,7 +117,7 @@ fn outputSpanData(resource: sdk.resource.Resource, cfg: exporters.stream.SinkCon
         try cfg.writer.print("| {s} {s} ", .{ trace_id_buff[0..], span_id_buff[0..] });
     }
     for (span.events) |event| {
-        try cfg.writer.print("| event {d} {s} ", .{ event.timestamp_ns, event.name });
+        try cfg.writer.print("| event {d} {s} ", .{ (event.timestamp orelse std.Io.Timestamp.zero).toNanoseconds(), event.name });
         if (cfg.include_resource) {
             if (event.attributes.len > 0) {
                 try cfg.writer.print("[", .{});

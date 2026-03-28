@@ -47,7 +47,7 @@ pub const ReaderAggregationState = struct {
     aggregation_selector: AggregationSelector,
 
     // For cumulative temporality, track last collection time
-    last_collection_time_ns: u64,
+    last_collection_time: std.Io.Timestamp,
 
     /// Initialize reader aggregation state
     pub fn init(
@@ -61,7 +61,7 @@ pub const ReaderAggregationState = struct {
             .mutex = .{},
             .temporality = temporality,
             .aggregation_selector = aggregation_selector,
-            .last_collection_time_ns = @intCast(std.time.nanoTimestamp()),
+            .last_collection_time = std.Io.Timestamp.zero,
         };
     }
 
@@ -104,18 +104,18 @@ pub const ReaderAggregationState = struct {
     }
 
     /// Collect metrics from all aggregations (lock-free aggregation access)
-    pub fn collect(self: *@This(), allocator: std.mem.Allocator) ![]sdk.MetricData {
+    pub fn collect(self: *@This(), allocator: std.mem.Allocator, io: std.Io) ![]sdk.MetricData {
         // Lock only for map iteration, aggregation data access is lock-free
         var entry_list = std.ArrayList(sdk.AttributeAggregationEntry).empty;
         defer entry_list.deinit(allocator);
 
         // Copy aggregation entry pointers under lock
-        try self.aggregations.snapshot(allocator, &entry_list);
+        try self.aggregations.snapshot(allocator, &entry_list, io);
 
         var metrics_list = std.ArrayList(sdk.MetricData).empty;
         errdefer metrics_list.deinit(allocator);
 
-        const current_timestamp = @as(u64, @intCast(std.time.nanoTimestamp()));
+        const current_timestamp = std.Io.Clock.real.now(io) catch std.Io.Timestamp.zero;
 
         // Process aggregation entries lock-free (atomic reads)
         for (entry_list.items) |*entry| {
@@ -139,7 +139,7 @@ pub const ReaderAggregationState = struct {
         self: *@This(),
         allocator: std.mem.Allocator,
         entry: *sdk.AttributeAggregationEntry,
-        timestamp: u64,
+        timestamp: std.Io.Timestamp,
     ) !?sdk.MetricData {
         _ = self; // Not used in this helper method
 
@@ -155,8 +155,8 @@ pub const ReaderAggregationState = struct {
         switch (entry.aggregation) {
             .sum_i64 => |*sum| {
                 data_points[0] = sdk.MetricDataPoint{
-                    .timestamp_ns = timestamp,
-                    .start_timestamp_ns = sum.start_timestamp_ns,
+                    .timestamp = timestamp,
+                    .start_timestamp = sum.start_timestamp,
                     .attributes = export_attributes,
                     .value = .{ .i64_sum = sum.value.load(.monotonic) },
                 };
@@ -172,8 +172,8 @@ pub const ReaderAggregationState = struct {
             },
             .sum_f64 => |*sum| {
                 data_points[0] = sdk.MetricDataPoint{
-                    .timestamp_ns = timestamp,
-                    .start_timestamp_ns = sum.start_timestamp_ns,
+                    .timestamp = timestamp,
+                    .start_timestamp = sum.start_timestamp,
                     .attributes = export_attributes,
                     .value = .{ .f64_sum = sum.value.load(.monotonic) },
                 };
@@ -197,8 +197,8 @@ pub const ReaderAggregationState = struct {
                 }
 
                 data_points[0] = sdk.MetricDataPoint{
-                    .timestamp_ns = timestamp,
-                    .start_timestamp_ns = 0, // Last value doesn't have start time
+                    .timestamp = timestamp,
+                    .start_timestamp = null, // Last value doesn't have start time
                     .attributes = export_attributes,
                     .value = .{ .i64_gauge = value.? },
                 };
@@ -222,8 +222,8 @@ pub const ReaderAggregationState = struct {
                 }
 
                 data_points[0] = sdk.MetricDataPoint{
-                    .timestamp_ns = timestamp,
-                    .start_timestamp_ns = 0, // Last value doesn't have start time
+                    .timestamp = timestamp,
+                    .start_timestamp = null, // Last value doesn't have start time
                     .attributes = export_attributes,
                     .value = .{ .f64_gauge = value.? },
                 };
@@ -252,8 +252,8 @@ pub const ReaderAggregationState = struct {
                 }
 
                 data_points[0] = sdk.MetricDataPoint{
-                    .timestamp_ns = timestamp,
-                    .start_timestamp_ns = hist.start_timestamp_ns,
+                    .timestamp = timestamp,
+                    .start_timestamp = hist.start_timestamp,
                     .attributes = export_attributes,
                     .value = .{
                         .i64_histogram = .{
@@ -291,8 +291,8 @@ pub const ReaderAggregationState = struct {
                 }
 
                 data_points[0] = sdk.MetricDataPoint{
-                    .timestamp_ns = timestamp,
-                    .start_timestamp_ns = hist.start_timestamp_ns,
+                    .timestamp = timestamp,
+                    .start_timestamp = hist.start_timestamp,
                     .attributes = export_attributes,
                     .value = .{
                         .f64_histogram = .{

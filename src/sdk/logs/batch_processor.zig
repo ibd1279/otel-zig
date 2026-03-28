@@ -9,6 +9,12 @@
 const std = @import("std");
 const api = @import("otel-api");
 
+fn milliTimestamp() i64 {
+    var ts: std.posix.system.timespec = undefined;
+    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
+    return @as(i64, ts.sec) * 1_000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+}
+
 const sdk = struct {
     const Resource = @import("../resource/resource.zig").Resource;
     const LogRecord = @import("log_record.zig").LogRecord;
@@ -215,7 +221,7 @@ pub const BatchLogRecordProcessor = struct {
             return .failure;
         }
 
-        const start_time = std.time.milliTimestamp();
+        const start_time = milliTimestamp();
 
         self.mutex.lock();
         defer self.mutex.unlock();
@@ -225,7 +231,7 @@ pub const BatchLogRecordProcessor = struct {
         if (was_flushing) {
             // Another flush is in progress, wait for it
             const remaining_ms = if (timeout_ms) |ms|
-                ms -| @as(u64, @intCast(std.time.milliTimestamp() - start_time))
+                ms -| @as(u64, @intCast(milliTimestamp() - start_time))
             else
                 null;
 
@@ -251,7 +257,7 @@ pub const BatchLogRecordProcessor = struct {
         // Wait for any export in progress
         while (self.export_in_progress.load(.acquire)) {
             const remaining_ms = if (timeout_ms) |ms|
-                ms -| @as(u64, @intCast(std.time.milliTimestamp() - start_time))
+                ms -| @as(u64, @intCast(milliTimestamp() - start_time))
             else
                 null;
 

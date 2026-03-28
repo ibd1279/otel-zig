@@ -25,28 +25,34 @@ const sdk = struct {
 ///
 /// Simple processor that exports metrics manually. Users must invoke `forceFlush`.
 pub const ManualReader = struct {
+    pub const Config = struct {
+        io: std.Io,
+    };
+
     pub const PipelineStep = @import("../common/pipeline.zig").PipelineStepInstructions(
         ManualReader,
         sdk.Reader,
-        void,
+        Config,
         reader,
         _initFn,
         setExporter,
     );
-    pub fn _initFn(self: *ManualReader, _: void, allocator: std.mem.Allocator) !void {
-        self.* = try init(allocator, null);
+    pub fn _initFn(self: *ManualReader, ctx: Config, allocator: std.mem.Allocator) !void {
+        self.* = try init(allocator, ctx.io, null);
     }
 
     allocator: std.mem.Allocator,
+    io: std.Io,
     exporter: ?sdk.MetricExporter,
     mutex: std.Thread.Mutex,
     is_shutdown: bool,
     registered_meters: std.ArrayListUnmanaged(*sdk.Meter),
     reader_state: sdk.ReaderAggregationState,
 
-    pub fn init(allocator: std.mem.Allocator, exporter: ?sdk.MetricExporter) !ManualReader {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, exporter: ?sdk.MetricExporter) !ManualReader {
         return .{
             .allocator = allocator,
+            .io = io,
             .exporter = exporter,
             .mutex = .{},
             .is_shutdown = false,
@@ -104,7 +110,7 @@ pub const ManualReader = struct {
         }
 
         // Collect all the aggregated metrics.
-        const collected_metrics = self.reader_state.collect(allocator) catch |err| {
+        const collected_metrics = self.reader_state.collect(allocator, self.io) catch |err| {
             std.log.err("Failed to collect metrics: {}", .{err});
             // Log error if needed
             return;
@@ -193,14 +199,14 @@ test "ManualReader and Observable instrument test." {
     mock_exporter.* = MockExporter.init(allocator);
 
     // Create a provider to tie all the parts together.
-    var provider = sdk.MeterProvider.init(allocator, sdk.Resource.empty);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, sdk.Resource.empty);
     defer provider.deinit();
 
     // Create processor with very short interval for testing (direct init)
     const processor = try allocator.create(ManualReader);
     {
         errdefer allocator.destroy(processor);
-        processor.* = try ManualReader.init(allocator, mock_exporter.metricExporter());
+        processor.* = try ManualReader.init(allocator, std.testing.io, mock_exporter.metricExporter());
         {
             errdefer processor.deinit();
             try provider.registerReader(processor.reader());

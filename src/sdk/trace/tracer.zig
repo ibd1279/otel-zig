@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const otel_api = @import("otel-api");
+
 const sdk = struct {
     const trace = struct {
         const RecordingSpan = @import("data.zig").RecordingSpan;
@@ -58,8 +59,8 @@ pub const StandardTracer = struct {
         }
 
         // Get timestamp
-        const default_ts: i64 = @intCast(std.time.nanoTimestamp());
-        const start_time = opts.start_time_ns orelse default_ts;
+        const default_ts = std.Io.Clock.real.now(self.provider.io) catch std.Io.Timestamp.zero;
+        const start_time = opts.start_time orelse default_ts;
 
         // Extract parent context if present
         const parent_span_context = otel_api.trace.trace_context.getSpanContext(ctx);
@@ -147,7 +148,7 @@ pub const StandardTracer = struct {
                     parent_span_context,
                     opts.kind,
                     start_time,
-                    null,
+                    null, // end_time — set on end()
                     true,
                     self.provider.allocator,
                 );

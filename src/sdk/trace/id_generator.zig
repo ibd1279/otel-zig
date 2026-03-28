@@ -37,10 +37,36 @@ pub const RandomIdGenerator = struct {
 
     pub fn init() RandomIdGenerator {
         var seed: [32]u8 = undefined;
-        std.crypto.random.bytes(&seed);
+        fillRandomBytes(&seed);
         return .{
             .prng = std.Random.ChaCha.init(seed),
         };
+    }
+
+    fn fillRandomBytes(buf: []u8) void {
+        const os = @import("builtin").os.tag;
+        switch (os) {
+            .macos, .ios, .tvos, .watchos, .freebsd, .netbsd, .openbsd, .dragonfly => {
+                std.c.arc4random_buf(buf.ptr, buf.len);
+            },
+            .linux => {
+                const rc = std.posix.system.getrandom(buf.ptr, buf.len, 0);
+                if (rc < 0) {
+                    // Fallback: use a time-based seed (not cryptographically secure)
+                    var ts: std.posix.system.timespec = undefined;
+                    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
+                    const t: u64 = @bitCast(ts.sec *% 1_000_000_000 +% ts.nsec);
+                    for (buf, 0..) |*b, i| b.* = @truncate(t >> @intCast((i % 8) * 8));
+                }
+            },
+            else => {
+                // Fallback: time-based seed
+                var ts: std.posix.system.timespec = undefined;
+                _ = std.posix.system.clock_gettime(.REALTIME, &ts);
+                const t: u64 = @bitCast(ts.sec *% 1_000_000_000 +% ts.nsec);
+                for (buf, 0..) |*b, i| b.* = @truncate(t >> @intCast((i % 8) * 8));
+            },
+        }
     }
 
     pub fn generateTraceId(self: *RandomIdGenerator) [16]u8 {

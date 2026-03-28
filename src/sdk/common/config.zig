@@ -105,12 +105,16 @@ pub const EnvironmentVariables = struct {
     pub const OTEL_ATTRIBUTE_COUNT_LIMIT = "OTEL_ATTRIBUTE_COUNT_LIMIT";
 };
 
-/// Get an environment variable value
+/// Get an environment variable value (returned slice is owned by page_allocator; caller must free)
 pub fn getEnvironmentVariable(name: []const u8) ?[]const u8 {
-    return std.process.getEnvVarOwned(std.heap.page_allocator, name) catch |err| switch (err) {
-        error.EnvironmentVariableNotFound => return null,
-        else => return null,
-    };
+    // Build a null-terminated name for the C getenv call.
+    var name_buf: [256]u8 = undefined;
+    if (name.len >= name_buf.len) return null;
+    @memcpy(name_buf[0..name.len], name);
+    name_buf[name.len] = 0;
+    const cstr = std.c.getenv(name_buf[0..name.len :0]) orelse return null;
+    const value = std.mem.sliceTo(cstr, 0);
+    return std.heap.page_allocator.dupe(u8, value) catch null;
 }
 
 /// Parse an environment variable as a specific type

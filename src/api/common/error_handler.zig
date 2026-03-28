@@ -183,25 +183,22 @@ pub inline fn isValidatingMode() bool {
 /// Default error handler that logs to stderr
 fn defaultErrorHandler(info: ErrorInfo, allocator: ?std.mem.Allocator) void {
     _ = allocator; // Not used in default handler for simplicity
-    var stderr_writer = std.fs.File.stderr().writer(&.{});
-    const stderr = &stderr_writer.interface;
-
-    stderr.print("[OpenTelemetry Error] Component: {t}, Operation: {s}, Type: {t}, Message: {s}", .{
+    std.debug.print("[OpenTelemetry Error] Component: {t}, Operation: {s}, Type: {t}, Message: {s}", .{
         info.component,
         info.operation,
         info.error_type,
         info.message,
-    }) catch return; // Don't fail if we can't log the error
+    });
 
     if (info.source_error) |err| {
-        stderr.print(", Error: {s}", .{@errorName(err)}) catch return;
+        std.debug.print(", Error: {s}", .{@errorName(err)});
     }
 
     if (info.context) |ctx| {
-        stderr.print(", Context: {s}", .{ctx}) catch return;
+        std.debug.print(", Context: {s}", .{ctx});
     }
 
-    stderr.print("\n", .{}) catch return;
+    std.debug.print("\n", .{});
 }
 
 /// Set the global error handler

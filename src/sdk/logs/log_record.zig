@@ -28,12 +28,12 @@ const sdk = struct {
 /// - span_id
 /// - flags
 pub const LogRecord = struct {
-    /// Time when the event occurred, nanoseconds since Unix epoch
-    timestamp_ns: ?i64 = null,
+    /// Time when the event occurred.
+    timestamp: ?std.Io.Timestamp = null,
 
-    /// Time when the event was observed, nanoseconds since Unix epoch
-    /// If not set, it should be set to the current time when the record is emitted
-    observed_timestamp_ns: ?i64 = null,
+    /// Time when the event was observed.
+    /// If not set, it should be set to the current time when the record is emitted.
+    observed_timestamp: ?std.Io.Timestamp = null,
 
     /// Numeric severity level
     severity_number: api.logs.Severity = .invalid,
@@ -78,8 +78,8 @@ pub const LogRecord = struct {
     /// All other fields are copied by value.
     pub fn initOwned(allocator: std.mem.Allocator, record: LogRecord) !LogRecord {
         var owned = LogRecord{
-            .timestamp_ns = record.timestamp_ns,
-            .observed_timestamp_ns = record.observed_timestamp_ns,
+            .timestamp = record.timestamp,
+            .observed_timestamp = record.observed_timestamp,
             .severity_number = record.severity_number,
             .trace_id = record.trace_id,
             .span_id = record.span_id,
@@ -136,8 +136,8 @@ test "LogRecord initOwned and deinitOwned" {
 
     // Create original log record with all possible fields
     const original = LogRecord{
-        .timestamp_ns = 1234567890,
-        .observed_timestamp_ns = 1234567891,
+        .timestamp = std.Io.Timestamp.fromNanoseconds(1234567890),
+        .observed_timestamp = std.Io.Timestamp.fromNanoseconds(1234567891),
         .severity_number = .info,
         .severity_text = "INFO",
         .body = .{ .string = "Test message" },
@@ -153,8 +153,8 @@ test "LogRecord initOwned and deinitOwned" {
     defer owned.deinitOwned(allocator);
 
     // Verify all fields are copied correctly
-    try testing.expectEqual(original.timestamp_ns, owned.timestamp_ns);
-    try testing.expectEqual(original.observed_timestamp_ns, owned.observed_timestamp_ns);
+    try testing.expectEqual(original.timestamp, owned.timestamp);
+    try testing.expectEqual(original.observed_timestamp, owned.observed_timestamp);
     try testing.expectEqual(original.severity_number, owned.severity_number);
     try testing.expectEqual(original.trace_id, owned.trace_id);
     try testing.expectEqual(original.span_id, owned.span_id);

@@ -15,8 +15,8 @@ const Bridge = @This();
 ctx: api.trace.Span.Context,
 parent_ctx: ?api.trace.Span.Context,
 kind: api.trace.Span.Kind,
-start_ns: i64,
-end_ns: ?i64,
+start_time: std.Io.Timestamp,
+end_time: ?std.Io.Timestamp,
 is_recording: bool,
 allocator: std.mem.Allocator,
 
@@ -28,7 +28,7 @@ setAttributesFn: *const fn (span_ptr: *anyopaque, entries: []const api.Attribute
 addEventFn: *const fn (span_ptr: *anyopaque, event: api.trace.Span.Event) anyerror!void,
 addLinkFn: *const fn (span_ptr: *anyopaque, link: api.trace.Span.Link) anyerror!void,
 addLinksFn: *const fn (span_ptr: *anyopaque, links: []const api.trace.Span.Link) anyerror!void,
-recordExceptionFn: *const fn (span_ptr: *anyopaque, exception: anyerror, attributes: ?[]const api.AttributeKeyValue, timestamp_ns: ?i64) anyerror!void,
+recordExceptionFn: *const fn (span_ptr: *anyopaque, exception: anyerror, attributes: ?[]const api.AttributeKeyValue, timestamp: ?std.Io.Timestamp) anyerror!void,
 endFn: *const fn (span_ptr: *anyopaque, bridge: Bridge, options: ?api.trace.Span.EndOptions) void,
 deinitFn: *const fn (span_ptr: *anyopaque) void,
 
@@ -37,8 +37,8 @@ pub fn init(
     ctx: api.trace.Span.Context,
     parent_ctx: ?api.trace.Span.Context,
     kind: api.trace.Span.Kind,
-    start_ns: i64,
-    end_ns: ?i64,
+    start_time: std.Io.Timestamp,
+    end_time: ?std.Io.Timestamp,
     is_recording: bool,
     allocator: std.mem.Allocator,
 ) @This() {
@@ -74,9 +74,9 @@ pub fn init(
             const self: T = @ptrCast(@alignCast(pointer));
             return ptr_info.pointer.child.addLinks(self, links);
         }
-        pub fn recordException(pointer: *anyopaque, exception: anyerror, attributes: ?[]const api.AttributeKeyValue, timestamp_ns: ?i64) anyerror!void {
+        pub fn recordException(pointer: *anyopaque, exception: anyerror, attributes: ?[]const api.AttributeKeyValue, timestamp: ?std.Io.Timestamp) anyerror!void {
             const self: T = @ptrCast(@alignCast(pointer));
-            return ptr_info.pointer.child.recordException(self, exception, attributes, timestamp_ns);
+            return ptr_info.pointer.child.recordException(self, exception, attributes, timestamp);
         }
         pub fn end(pointer: *anyopaque, bridge: Bridge, options: ?api.trace.Span.EndOptions) void {
             const self: T = @ptrCast(@alignCast(pointer));
@@ -92,8 +92,8 @@ pub fn init(
         .ctx = ctx,
         .parent_ctx = parent_ctx,
         .kind = kind,
-        .start_ns = start_ns,
-        .end_ns = end_ns,
+        .start_time = start_time,
+        .end_time = end_time,
         .is_recording = is_recording,
         .allocator = allocator,
 
