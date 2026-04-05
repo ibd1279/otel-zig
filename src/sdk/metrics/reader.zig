@@ -83,6 +83,13 @@ pub const Reader = union(enum) {
         }
     }
 
+    pub fn setResource(self: *const Reader, resource: @import("../resource/resource.zig").Resource) void {
+        switch (self.*) {
+            .noop => {},
+            .bridge => |reader| reader.setResourceFn(reader.reader_ptr, resource),
+        }
+    }
+
     /// Record a measurement from an instrument
     pub fn recordMeasurement(
         self: *const Reader,
@@ -110,6 +117,7 @@ pub const BridgeReader = struct {
     unregisterMeterFn: *const fn (reader_ptr: *anyopaque, meter: *sdk.BasicMeter) void,
     unregisterAllMetersFn: *const fn (reader_ptr: *anyopaque) void,
     recordMeasurementFn: *const fn (reader_ptr: *anyopaque, value: MetricValue, attributes: []const api.AttributeKeyValue, metadata: sdk.MetricMetadata, metadata_hash: u64) void,
+    setResourceFn: *const fn (reader_ptr: *anyopaque, resource: @import("../resource/resource.zig").Resource) void,
 
     pub fn init(ptr: anytype) BridgeReader {
         const T = @TypeOf(ptr);
@@ -152,6 +160,10 @@ pub const BridgeReader = struct {
                 const self: T = @ptrCast(@alignCast(pointer));
                 return ptr_info.pointer.child.recordMeasurement(self, value, attributes, metadata, metadata_hash);
             }
+            pub fn setResource(pointer: *anyopaque, resource: @import("../resource/resource.zig").Resource) void {
+                const self: T = @ptrCast(@alignCast(pointer));
+                return ptr_info.pointer.child.setResource(self, resource);
+            }
         };
 
         return .{
@@ -165,6 +177,7 @@ pub const BridgeReader = struct {
             .unregisterMeterFn = VTable.unregisterMeter,
             .unregisterAllMetersFn = VTable.unregisterAllMeters,
             .recordMeasurementFn = VTable.recordMeasurement,
+            .setResourceFn = VTable.setResource,
         };
     }
 };

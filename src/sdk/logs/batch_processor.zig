@@ -74,6 +74,7 @@ pub const BatchLogRecordProcessor = struct {
     export_interval_ms: u32,
     max_queue_size: usize,
     log_queue: std.ArrayList(sdk.LogRecord),
+    resource: sdk.Resource = sdk.Resource.empty,
 
     /// Initialize a new batch log record processor
     /// export_interval_ms: How often to export log records (default: 5000ms = 5s)
@@ -161,10 +162,10 @@ pub const BatchLogRecordProcessor = struct {
 
     pub fn onEmit(self: *BatchLogRecordProcessor, record: sdk.LogRecord, ctx: []const api.ContextKeyValue, resource: sdk.Resource) void {
         _ = ctx;
-        _ = resource;
 
         self.mutex.lock();
         defer self.mutex.unlock();
+        self.resource = resource;
 
         if (self.is_shutdown.load(.acquire)) {
             return;
@@ -322,7 +323,7 @@ pub const BatchLogRecordProcessor = struct {
         // Export log records directly from queue
         // Temporarily release mutex for export
         self.mutex.unlock();
-        const result = self.exporter.exportRecords(self.log_queue.items, @import("../resource/resource.zig").Resource.empty);
+        const result = self.exporter.exportRecords(self.log_queue.items, self.resource);
         self.mutex.lock();
 
         // Clean up exported records

@@ -36,13 +36,13 @@ pub const ResourceDetector = union(enum) {
     custom: CustomDetector,
 
     /// Detect resource attributes
-    pub fn detect(self: *ResourceDetector, allocator: std.mem.Allocator) anyerror!sdk.Resource {
+    pub fn detect(self: *ResourceDetector, allocator: std.mem.Allocator, io: std.Io) anyerror!sdk.Resource {
         return switch (self.*) {
-            .default => |*detector| detector.detect(allocator),
-            .process => |*detector| detector.detect(allocator),
-            .host => |*detector| detector.detect(allocator),
-            .environment => |*detector| detector.detect(allocator),
-            .custom => |*detector| detector.detect(allocator),
+            .default => |*detector| detector.detect(allocator, io),
+            .process => |*detector| detector.detect(allocator, io),
+            .host => |*detector| detector.detect(allocator, io),
+            .environment => |*detector| detector.detect(allocator, io),
+            .custom => |*detector| detector.detect(allocator, io),
         };
     }
 };
@@ -55,7 +55,7 @@ pub const DefaultDetector = struct {
         return .{ .detectors = detectors };
     }
 
-    pub fn detect(self: *DefaultDetector, allocator: std.mem.Allocator) anyerror!sdk.Resource {
+    pub fn detect(self: *DefaultDetector, allocator: std.mem.Allocator, io: std.Io) anyerror!sdk.Resource {
         // An arena is used for detection because some detectors return static strings, others
         // need to copy strings. Assuming all allocation is done with the arena, we don't have
         // to keep track of the memory until the final resource is allocated.
@@ -65,7 +65,7 @@ pub const DefaultDetector = struct {
         // Run all detectors
         var base = try sdk.Resource.initOwned(arena.allocator(), .default);
         for (self.detectors) |*detector| {
-            const detected = try detector.detect(arena.allocator());
+            const detected = try detector.detect(arena.allocator(), io);
             base = try sdk.Resource.initOwnedMerge(arena.allocator(), base, detected);
         }
 
@@ -80,7 +80,7 @@ pub const ProcessDetector = struct {
         return .{};
     }
 
-    pub fn detect(self: *ProcessDetector, allocator: std.mem.Allocator) anyerror!sdk.Resource {
+    pub fn detect(self: *ProcessDetector, allocator: std.mem.Allocator, io: std.Io) anyerror!sdk.Resource {
         _ = self;
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
@@ -95,8 +95,7 @@ pub const ProcessDetector = struct {
                 attrs = attrs.add(.{ .key = "process.pid", .value = .{ .int = @intCast(pid) } });
 
                 // Let the arena allocator clean up the memory.
-                var size: u32 = std.fs.max_path_bytes;
-                // const buf = try arena.allocator().alloc(u8, size);
+                var size: u32 = std.Io.Dir.max_path_bytes;
                 const buf = try arena.allocator().allocSentinel(u8, size, 0);
 
                 if (std.c._NSGetExecutablePath(buf.ptr, &size) == 0) {
@@ -111,9 +110,10 @@ pub const ProcessDetector = struct {
                 const pid = std.c.getpid();
                 attrs = attrs.add(.{ .key = "process.pid", .value = .{ .int = @intCast(pid) } });
 
-                // Try to read executable path from procfs symlink
-                var exe_buf: [std.fs.max_path_bytes]u8 = undefined;
-                if (std.fs.cwd().readLink("/proc/curproc/file", &exe_buf)) |exe_path| {
+                // Try to read executable path from procfs symlink (procfs must be mounted)
+                var exe_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+                if (std.Io.Dir.readLinkAbsolute(io, "/proc/curproc/file", &exe_buf)) |len| {
+                    const exe_path = exe_buf[0..len];
                     const exe_path_owned = try arena.allocator().dupe(u8, exe_path);
                     const basename = std.fs.path.basename(exe_path_owned);
                     attrs = attrs.add(.{ .key = "process.executable.path", .value = .{ .string = exe_path_owned } });
@@ -136,7 +136,8 @@ pub const HostDetector = struct {
         return .{};
     }
 
-    pub fn detect(self: *HostDetector, allocator: std.mem.Allocator) anyerror!sdk.Resource {
+    pub fn detect(self: *HostDetector, allocator: std.mem.Allocator, io: std.Io) anyerror!sdk.Resource {
+        _ = io;
         _ = self;
 
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -185,8 +186,9 @@ pub const EnvironmentDetector = struct {
         return .{};
     }
 
-    pub fn detect(self: *EnvironmentDetector, allocator: std.mem.Allocator) anyerror!sdk.Resource {
+    pub fn detect(self: *EnvironmentDetector, allocator: std.mem.Allocator, io: std.Io) anyerror!sdk.Resource {
         _ = self;
+        _ = io;
 
         var arena = std.heap.ArenaAllocator.init(allocator);
         defer arena.deinit();
@@ -225,11 +227,11 @@ pub const EnvironmentDetector = struct {
 /// Custom detector with user-provided implementation
 pub const CustomDetector = struct {
     impl: *anyopaque,
-    detectFn: *const fn (impl: *anyopaque, allocator: std.mem.Allocator) anyerror!sdk.Resource,
+    detectFn: *const fn (impl: *anyopaque, allocator: std.mem.Allocator, io: std.Io) anyerror!sdk.Resource,
 
     pub fn init(
         impl: *anyopaque,
-        detectFn: *const fn (impl: *anyopaque, allocator: std.mem.Allocator) anyerror!sdk.Resource,
+        detectFn: *const fn (impl: *anyopaque, allocator: std.mem.Allocator, io: std.Io) anyerror!sdk.Resource,
     ) CustomDetector {
         return .{
             .impl = impl,
@@ -237,13 +239,13 @@ pub const CustomDetector = struct {
         };
     }
 
-    pub fn detect(self: *CustomDetector, allocator: std.mem.Allocator) anyerror!sdk.Resource {
-        return self.detectFn(self.impl, allocator);
+    pub fn detect(self: *CustomDetector, allocator: std.mem.Allocator, io: std.Io) anyerror!sdk.Resource {
+        return self.detectFn(self.impl, allocator, io);
     }
 };
 
 /// Detect resource using all default detectors
-pub fn detectResource(allocator: std.mem.Allocator) anyerror!sdk.Resource {
+pub fn detectResource(allocator: std.mem.Allocator, io: std.Io) anyerror!sdk.Resource {
     const process_detector = ResourceDetector{ .process = ProcessDetector.init() };
     const host_detector = ResourceDetector{ .host = HostDetector.init() };
     const env_detector = ResourceDetector{ .environment = EnvironmentDetector.init() };
@@ -252,7 +254,7 @@ pub fn detectResource(allocator: std.mem.Allocator) anyerror!sdk.Resource {
     const default_detector = DefaultDetector.init(&detectors);
     var detector = ResourceDetector{ .default = default_detector };
 
-    return detector.detect(allocator);
+    return detector.detect(allocator, io);
 }
 
 test "HostDetector" {
@@ -260,7 +262,7 @@ test "HostDetector" {
     const allocator = testing.allocator;
 
     var detector = HostDetector.init();
-    var resource = try detector.detect(allocator);
+    var resource = try detector.detect(allocator, std.testing.io);
     defer resource.deinitOwned(allocator);
 
     // Should have host.type and host.arch

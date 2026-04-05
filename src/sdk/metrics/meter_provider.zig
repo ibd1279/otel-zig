@@ -251,6 +251,7 @@ pub const MeterProvider = struct {
     ///
     /// This method is not thread-safe and should only be called during initialization.
     pub fn registerReader(self: *MeterProvider, reader: sdk.metrics.Reader) !void {
+        reader.setResource(self.resource);
         try self.readers.append(self.allocator, reader);
     }
 

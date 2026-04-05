@@ -48,6 +48,7 @@ pub const ManualReader = struct {
     is_shutdown: bool,
     registered_meters: std.ArrayListUnmanaged(*sdk.Meter),
     reader_state: sdk.ReaderAggregationState,
+    resource: sdk.Resource = sdk.Resource.empty,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, exporter: ?sdk.MetricExporter) !ManualReader {
         return .{
@@ -110,7 +111,7 @@ pub const ManualReader = struct {
         }
 
         // Collect all the aggregated metrics.
-        const collected_metrics = self.reader_state.collect(allocator, self.io) catch |err| {
+        const collected_metrics = self.reader_state.collect(allocator, self.io, self.resource) catch |err| {
             std.log.err("Failed to collect metrics: {}", .{err});
             // Log error if needed
             return;
@@ -182,6 +183,10 @@ pub const ManualReader = struct {
         defer self.mutex.unlock();
 
         self.registered_meters.clearAndFree(self.allocator);
+    }
+
+    pub fn setResource(self: *ManualReader, resource: sdk.Resource) void {
+        self.resource = resource;
     }
 
     pub fn reader(self: *ManualReader) sdk.Reader {

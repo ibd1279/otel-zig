@@ -152,7 +152,6 @@ pub const OtlpLogExporter = struct {
             extra_headers[h] = header;
         }
 
-        // Create HTTP request
         const full_uri = try std.Uri.parse(full_url);
         var req = try client.request(.POST, full_uri, .{
             .headers = .{
@@ -174,7 +173,6 @@ pub const OtlpLogExporter = struct {
 
         const res = try req.receiveHead(&.{});
 
-        // Check response status
         switch (res.head.status) {
             .ok => return .success,
             .bad_request, .unauthorized, .forbidden, .not_found => {

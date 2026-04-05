@@ -161,10 +161,6 @@ pub const Span = union(enum) {
         /// If null, current time will be used
         start_time: ?std.Io.Timestamp = null,
 
-        /// Whether this span should be recorded even if not sampled
-        /// This affects the IsRecording flag
-        record: bool = true,
-
         /// Initial span status
         status: Status = .default,
 

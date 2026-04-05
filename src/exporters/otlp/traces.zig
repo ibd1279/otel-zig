@@ -176,6 +176,7 @@ pub const OtlpTraceExporter = struct {
         defer resp_writer.deinit();
 
         const full_uri = try std.Uri.parse(full_url);
+
         const req = try client.fetch(std.http.Client.FetchOptions{
             .location = .{ .uri = full_uri },
             .method = .POST,

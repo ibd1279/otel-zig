@@ -104,7 +104,7 @@ pub const ReaderAggregationState = struct {
     }
 
     /// Collect metrics from all aggregations (lock-free aggregation access)
-    pub fn collect(self: *@This(), allocator: std.mem.Allocator, io: std.Io) ![]sdk.MetricData {
+    pub fn collect(self: *@This(), allocator: std.mem.Allocator, io: std.Io, resource: sdk.Resource) ![]sdk.MetricData {
         // Lock only for map iteration, aggregation data access is lock-free
         var entry_list = std.ArrayList(sdk.AttributeAggregationEntry).empty;
         defer entry_list.deinit(allocator);
@@ -124,6 +124,7 @@ pub const ReaderAggregationState = struct {
                 allocator,
                 entry,
                 current_timestamp,
+                resource,
             );
 
             if (metric_data) |data| {
@@ -140,6 +141,7 @@ pub const ReaderAggregationState = struct {
         allocator: std.mem.Allocator,
         entry: *sdk.AttributeAggregationEntry,
         timestamp: std.Io.Timestamp,
+        resource: sdk.Resource,
     ) !?sdk.MetricData {
         _ = self; // Not used in this helper method
 
@@ -167,7 +169,7 @@ pub const ReaderAggregationState = struct {
                     .type = .sum,
                     .data_points = data_points,
                     .scope = entry.metadata.instrumentation_scope,
-                    .resource = sdk.Resource.empty,
+                    .resource = resource,
                 };
             },
             .sum_f64 => |*sum| {
@@ -184,7 +186,7 @@ pub const ReaderAggregationState = struct {
                     .type = .sum,
                     .data_points = data_points,
                     .scope = entry.metadata.instrumentation_scope,
-                    .resource = sdk.Resource.empty,
+                    .resource = resource,
                 };
             },
             .last_value_i64 => |*lv| {
@@ -209,7 +211,7 @@ pub const ReaderAggregationState = struct {
                     .type = .gauge,
                     .data_points = data_points,
                     .scope = entry.metadata.instrumentation_scope,
-                    .resource = sdk.Resource.empty,
+                    .resource = resource,
                 };
             },
             .last_value_f64 => |*lv| {
@@ -234,7 +236,7 @@ pub const ReaderAggregationState = struct {
                     .type = .gauge,
                     .data_points = data_points,
                     .scope = entry.metadata.instrumentation_scope,
-                    .resource = sdk.Resource.empty,
+                    .resource = resource,
                 };
             },
             .histogram_i64 => |*hist| {
@@ -273,7 +275,7 @@ pub const ReaderAggregationState = struct {
                     .type = .histogram,
                     .data_points = data_points,
                     .scope = entry.metadata.instrumentation_scope,
-                    .resource = sdk.Resource.empty,
+                    .resource = resource,
                 };
             },
             .histogram_f64 => |*hist| {
@@ -312,7 +314,7 @@ pub const ReaderAggregationState = struct {
                     .type = .histogram,
                     .data_points = data_points,
                     .scope = entry.metadata.instrumentation_scope,
-                    .resource = sdk.Resource.empty,
+                    .resource = resource,
                 };
             },
             .drop => {

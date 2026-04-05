@@ -57,6 +57,7 @@ pub const PeriodicReader = struct {
     collection_interval_ms: u32,
     registered_meters: std.ArrayListUnmanaged(*sdk.Meter),
     reader_state: sdk.ReaderAggregationState,
+    resource: sdk.Resource = sdk.Resource.empty,
 
     /// Initialize a new basic periodic metrics processor
     /// collection_interval_ms: How often to collect metrics (default: 60000ms = 60s)
@@ -174,7 +175,7 @@ pub const PeriodicReader = struct {
         }
 
         // Collect all the aggregated metrics.
-        const collected_metrics = self.reader_state.collect(allocator, self.io) catch |err| {
+        const collected_metrics = self.reader_state.collect(allocator, self.io, self.resource) catch |err| {
             std.log.err("Failed to collect metrics: {}", .{err});
             // Log error if needed
             return;
@@ -287,6 +288,10 @@ pub const PeriodicReader = struct {
         defer self.mutex.unlock();
 
         self.registered_meters.clearAndFree(self.allocator);
+    }
+
+    pub fn setResource(self: *PeriodicReader, resource: sdk.Resource) void {
+        self.resource = resource;
     }
 
     /// Set the exporter for this processor
