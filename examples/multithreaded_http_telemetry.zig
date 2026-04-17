@@ -416,6 +416,12 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
     );
 }
 
+fn runHttpServerThread(shared_state: *SharedState, config: Config, io: std.Io) void {
+    httpServerThread(shared_state, config, io) catch |err| {
+        std.log.err("http server thread error: {s}", .{@errorName(err)});
+    };
+}
+
 fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !void {
     _ = config; // Config not used in server thread, only in reader thread
 
@@ -443,7 +449,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !voi
         errdefer shared_state.allocator.destroy(exporter);
         exporter.* = otel_exporters.otlp.OtlpLogExporter.init(shared_state.allocator, .{ .io = io });
         errdefer exporter.deinit();
-        const processor = try otel_sdk.logs.BatchLogRecordProcessor.init(io, shared_state.allocator, exporter.logRecordExporter(), 5000, 5000, try otel_sdk.resource.Resource.initOwned(shared_state.allocator, core_resource));
+        const processor = try otel_sdk.logs.BatchLogRecordProcessor.init(io, shared_state.allocator, exporter.logRecordExporter(), 5000, 5000, core_resource);
         errdefer processor.deinit();
         try processor.start();
         try logger_provider.registerProcessor(processor.logProcessor());
@@ -555,14 +561,10 @@ fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !voi
     const meter = try meter_provider.getMeterWithScope(server_scope);
     const request_instrument = try meter.createCounter(i64, "product_request_count", null, "1", null);
 
-    // Accept connections loop
-    while (!shared_state.shouldStop()) {
-        // Set a timeout for accept to periodically check shouldStop
+    // Accept connections loop — exits when the Io.Group is cancelled.
+    while (true) {
         const stream = server.accept(io) catch |err| switch (err) {
-            error.WouldBlock => {
-                std.Io.sleep(io, .{ .nanoseconds = std.time.ns_per_ms * 10 }, .awake) catch {};
-                continue;
-            },
+            error.Canceled => break,
             else => {
                 logger.emitLog(
                     &.{},
@@ -571,7 +573,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !voi
                     &[_]otel_api.common.AttributeKeyValue{
                         .{ .key = "error", .value = .{ .string = @errorName(err) } },
                     },
-                    null, // event_name
+                    null,
                 );
                 continue;
             },
@@ -1021,16 +1023,15 @@ pub fn main(init: std.process.Init) !void {
     print("⏱️  Observable uptime gauge will track application runtime\n", .{});
     print("⏰ Running for {} seconds...\n\n", .{config.duration_seconds});
 
-    // Start both threads
-    const server_thread = try Thread.spawn(.{}, httpServerThread, .{ &shared_state, config, io });
-    const reader_thread = try Thread.spawn(.{}, numberReaderThread, .{ &shared_state, config, io });
+    // Server runs as a group task so group.cancel(io) can interrupt its blocking accept().
+    // Reader runs on the current goroutine for the configured duration.
+    // When the reader finishes, defer fires group.cancel(io), which sends an OS-level
+    // signal to the server task causing accept() to return error.Canceled.
+    var group: std.Io.Group = .init;
+    defer group.cancel(io);
 
-    // Wait for reader thread to complete (it stops after configured duration)
-    reader_thread.join();
-
-    // Stop server thread
-    shared_state.stop();
-    server_thread.join();
+    group.async(io, runHttpServerThread, .{ &shared_state, config, io });
+    try numberReaderThread(&shared_state, config, io);
 
     // Get final error count
     const final_error_count = shared_state.getErrorCount();

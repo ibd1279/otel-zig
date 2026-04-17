@@ -59,16 +59,12 @@ pub const TracerProvider = struct {
 
     /// Clean up provider resources
     pub fn deinit(self: *TracerProvider) void {
-        // make sure we have shutdown before freeing resources. This
-        // involves the mutex, so doing it outside of the Mutex.
         _ = self.shutdown(null);
 
-        // Clean up the local lists.
         {
             self.mutex.lockUncancelable(self.io);
             defer self.mutex.unlock(self.io);
 
-            // Clean up the tracers.
             var iter = self.cache.iterator();
             while (iter.next()) |kv| {
                 kv.key_ptr.deinitOwned(self.allocator);
@@ -77,7 +73,6 @@ pub const TracerProvider = struct {
             }
             self.cache.deinit(self.allocator);
 
-            // Clean up the processors.
             for (self.processors.items) |processor| {
                 processor.deinit();
                 processor.destroy();

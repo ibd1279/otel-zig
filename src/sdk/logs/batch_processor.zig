@@ -224,71 +224,21 @@ pub const BatchLogRecordProcessor = struct {
 
     /// Force export all queued log records immediately
     pub fn forceFlush(self: *BatchLogRecordProcessor, timeout_ms: ?u64) api.common.FlushResult {
-        // Quick check without mutex
-        if (self.is_shutdown.load(.acquire)) {
-            return .failure;
-        }
+        return @import("../common/batch_flush.zig").performForceFlush(
+            BatchLogRecordProcessor,
+            self,
+            timeout_ms,
+            exportBatchAndFlushExporterLocked,
+        );
+    }
 
-        const start_time = milliTimestamp();
-
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-
-        // Try to set flush_in_progress atomically
-        const was_flushing = self.flush_in_progress.swap(true, .seq_cst);
-        if (was_flushing) {
-            // Another flush is in progress; loop on wait to guard against
-            // spurious wakeups returning a false success.
-            while (self.flush_in_progress.load(.acquire)) {
-                const remaining_ms = if (timeout_ms) |ms|
-                    ms -| @as(u64, @intCast(milliTimestamp() - start_time))
-                else
-                    null;
-
-                if (remaining_ms == 0) {
-                    return .timeout;
-                }
-
-                self.flush_complete.waitUncancelable(self.io, &self.mutex);
-            }
-            return .success;
-        }
-
-        defer {
-            self.flush_in_progress.store(false, .release);
-            self.flush_complete.broadcast(self.io);
-        }
-
-        // Wait for any export in progress
-        while (self.export_in_progress.load(.acquire)) {
-            const remaining_ms = if (timeout_ms) |ms|
-                ms -| @as(u64, @intCast(milliTimestamp() - start_time))
-            else
-                null;
-
-            if (remaining_ms == 0) {
-                return .timeout;
-            }
-
-            self.export_complete.waitUncancelable(self.io, &self.mutex);
-        }
-
-        // Now do the export with atomic flag
-        self.export_in_progress.store(true, .release);
-        defer {
-            self.export_in_progress.store(false, .release);
-            self.export_complete.broadcast(self.io);
-        }
-
-        // Export log records (mutex is held)
+    /// Export queued log records and flush the exporter. Called with self.mutex held.
+    fn exportBatchAndFlushExporterLocked(self: *BatchLogRecordProcessor, timeout_ms: ?u64) api.common.FlushResult {
         if (self.log_queue.items.len > 0) {
             const result = self.exportBatchLocked();
-            if (result != .success) {
-                return .failure;
-            }
+            if (result != .success) return .failure;
         }
 
-        // Flush the exporter
         self.mutex.unlock(self.io);
         const flush_result = self.exporter.forceFlush(timeout_ms);
         self.mutex.lockUncancelable(self.io);

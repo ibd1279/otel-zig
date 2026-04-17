@@ -51,21 +51,24 @@ pub const MeterProvider = struct {
     }
 
     pub fn deinit(self: *MeterProvider) void {
-        // make sure we have shutdown before freeing resources. This
-        // involves the mutex, so doing it outside of the Mutex.
         _ = self.shutdown(null);
 
-        // readers reference the meters for invoking the async instruments
-        // clean those up. Probably involves a mutex on the reader, so
-        // doing it outside of the Mutex
+        // Remove meter refs from readers before freeing meters; reader threads
+        // may still be waking from sleep so clear before they can iterate.
         for (self.readers.items) |*reader| reader.unregisterAllMeters();
 
-        // Clean up the local lists.
+        // Join reader threads OUTSIDE the provider mutex so we don't hold
+        // the lock while waiting for a sleep to expire.
+        for (self.readers.items) |reader| {
+            reader.deinit();
+            reader.destroy();
+        }
+
+        // Now safe to free everything else.
         {
             self.mutex.lockUncancelable(self.io);
             defer self.mutex.unlock(self.io);
 
-            // Clean up the meters.
             var iter = self.cache.iterator();
             while (iter.next()) |kv| {
                 kv.key_ptr.deinitOwned(self.allocator);
@@ -73,16 +76,9 @@ pub const MeterProvider = struct {
                 self.allocator.destroy(kv.value_ptr.*);
             }
             self.cache.deinit(self.allocator);
-
-            // Clean up the readers.
-            for (self.readers.items) |reader| {
-                reader.deinit();
-                reader.destroy();
-            }
             self.readers.deinit(self.allocator);
         }
 
-        // Clean up the owned structures. With the meters gone, these can be cleaned up.
         self.views.deinit(self.allocator);
         self.resource.deinitOwned(self.allocator);
     }
@@ -112,6 +108,12 @@ pub const MeterProvider = struct {
         }
 
         const result = self.forceFlush(timeout.remaining() catch return .timeout).asProcessResult();
+
+        // Stop reader background threads after the final flush so all data is exported first.
+        for (self.readers.items) |*reader| {
+            _ = reader.shutdown(timeout.remaining() catch null);
+        }
+
         if (result.isSuccess()) self.is_shutdown.store(true, .monotonic);
         return result;
     }

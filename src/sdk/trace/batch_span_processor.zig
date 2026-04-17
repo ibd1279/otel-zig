@@ -220,63 +220,16 @@ pub const BatchSpanProcessor = struct {
 
     /// Force export all queued spans immediately
     pub fn forceFlush(self: *BatchSpanProcessor, timeout_ms: ?u64) otel_api.common.FlushResult {
-        // Quick check without mutex
-        if (self.is_shutdown.load(.acquire)) {
-            return .failure;
-        }
+        return @import("../common/batch_flush.zig").performForceFlush(
+            BatchSpanProcessor,
+            self,
+            timeout_ms,
+            exportBatchAndFlushExporterLocked,
+        );
+    }
 
-        const start_time = milliTimestamp();
-
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-
-        // Try to set flush_in_progress atomically
-        const was_flushing = self.flush_in_progress.swap(true, .seq_cst);
-        if (was_flushing) {
-            // Another flush is in progress; loop on wait to guard against
-            // spurious wakeups returning a false success.
-            while (self.flush_in_progress.load(.acquire)) {
-                const remaining_ms = if (timeout_ms) |ms|
-                    ms -| @as(u64, @intCast(milliTimestamp() - start_time))
-                else
-                    null;
-
-                if (remaining_ms == 0) {
-                    return .timeout;
-                }
-
-                self.flush_complete.waitUncancelable(self.io, &self.mutex);
-            }
-            return .success;
-        }
-
-        defer {
-            self.flush_in_progress.store(false, .release);
-            self.flush_complete.broadcast(self.io);
-        }
-
-        // Wait for any export in progress
-        while (self.export_in_progress.load(.acquire)) {
-            const remaining_ms = if (timeout_ms) |ms|
-                ms -| @as(u64, @intCast(milliTimestamp() - start_time))
-            else
-                null;
-
-            if (remaining_ms == 0) {
-                return .timeout;
-            }
-
-            self.export_complete.waitUncancelable(self.io, &self.mutex);
-        }
-
-        // Now do the export with atomic flag
-        self.export_in_progress.store(true, .release);
-        defer {
-            self.export_in_progress.store(false, .release);
-            self.export_complete.broadcast(self.io);
-        }
-
-        // Export spans (mutex is held)
+    /// Export queued spans and flush the exporter. Called with self.mutex held.
+    fn exportBatchAndFlushExporterLocked(self: *BatchSpanProcessor, timeout_ms: ?u64) otel_api.common.FlushResult {
         if (self.span_queue.items.len > 0) {
             const spans_to_export = self.span_queue.toOwnedSlice(self.allocator) catch |err| {
                 error_handler.reportError(.{
@@ -289,7 +242,6 @@ pub const BatchSpanProcessor = struct {
                 return .failure;
             };
 
-            // Temporarily release mutex for export
             self.mutex.unlock(self.io);
             if (self.exporter) |exporter| {
                 for (spans_to_export) |data_pair| {
@@ -303,7 +255,6 @@ pub const BatchSpanProcessor = struct {
             self.mutex.lockUncancelable(self.io);
         }
 
-        // Flush the exporter
         self.mutex.unlock(self.io);
         const flush_result = if (self.exporter) |exporter| exporter.forceFlush(timeout_ms) else ExportResult.success;
         self.mutex.lockUncancelable(self.io);

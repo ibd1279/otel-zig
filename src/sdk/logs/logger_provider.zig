@@ -48,31 +48,25 @@ pub const LoggerProvider = struct {
     }
 
     pub fn deinit(self: *LoggerProvider) void {
-        // make sure we have flushed before we fully clean up.
         _ = self.shutdown(null);
 
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
 
-        // Iterate over all the loggers to clean them up.
         var iter = self.cache.iterator();
         while (iter.next()) |kv| {
-            // Clean up the logger and the hash key.
             kv.key_ptr.deinitOwned(self.allocator);
             kv.value_ptr.*.deinit();
             self.allocator.destroy(kv.value_ptr.*);
         }
         self.cache.deinit(self.allocator);
 
-        // Iterate over the processors.
         for (self.processors.items) |processor| {
-            // Clean up the processor.
             processor.deinit();
             processor.destroy();
         }
         self.processors.deinit(self.allocator);
 
-        // Clean up the resource.
         self.resource.deinitOwned(self.allocator);
     }
 

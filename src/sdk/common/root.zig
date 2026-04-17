@@ -35,6 +35,8 @@ pub const buildPipeline = pipeline_zig.buildPipeline;
 // Instrumentation Scope Hash Map Context
 pub const InstrumentationScopeMapContext = @import("scope_context.zig").InstrumentationScopeMapContext;
 
+pub const batch_flush = @import("batch_flush.zig");
+
 test {
     std.testing.refAllDecls(@This());
 }

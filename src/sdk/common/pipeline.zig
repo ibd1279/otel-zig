@@ -38,7 +38,16 @@ pub fn PipelineBuilder(comptime ProviderT: type) type {
                 .provider => |provider| {
                     const LinkType = @TypeOf(link);
 
-                    const processor_raw = link.make(provider.allocator) catch |e| return .{ .invalid = e };
+                    // Inject provider's resource into the step config if the config
+                    // has a `resource` field and the provider has one. This ensures
+                    // processors see the correct resource without callers having to
+                    // duplicate it in their BatchConfig.
+                    var configured_link = link;
+                    if (comptime @hasDecl(LinkType, "ContextType") and @hasField(LinkType.ContextType, "resource") and @hasField(ProviderContainer, "resource")) {
+                        configured_link.context.resource = provider.resource;
+                    }
+
+                    const processor_raw = configured_link.make(provider.allocator) catch |e| return .{ .invalid = e };
                     const processor_interface = LinkType.convertFn(processor_raw);
 
                     registerProcessor(provider, processor_interface) catch |e| {
