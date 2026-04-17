@@ -33,6 +33,12 @@ pub fn getGlobalLoggerProvider() *const logs.LoggerProvider {
 /// Set the global logger provider by value, managing interface wrapper memory internally.
 /// Uses page allocator to manage the interface wrapper memory.
 /// Returns error if allocation fails.
+///
+/// Safety: This function is not safe to call concurrently with
+/// `getGlobalLoggerProvider()` or with threads actively using a
+/// reference obtained from a prior call. Provider replacement must occur
+/// only when no other thread holds a reference to the previous provider.
+/// Intended for use during application startup or controlled shutdown only.
 pub fn setGlobalLoggerProvider(provider: ?logs.LoggerProvider) !void {
     while (!logger_mutex.tryLock()) {}
     defer logger_mutex.unlock();
@@ -67,6 +73,12 @@ pub fn getGlobalTracerProvider() *const trace.TracerProvider {
 /// Set the global tracer provider by value, managing interface wrapper memory internally.
 /// Uses page allocator to manage the interface wrapper memory.
 /// Returns error if allocation fails.
+///
+/// Safety: This function is not safe to call concurrently with
+/// `getGlobalTracerProvider()` or with threads actively using a
+/// reference obtained from a prior call. Provider replacement must occur
+/// only when no other thread holds a reference to the previous provider.
+/// Intended for use during application startup or controlled shutdown only.
 pub fn setGlobalTracerProvider(provider: ?trace.TracerProvider) !void {
     while (!tracer_mutex.tryLock()) {}
     defer tracer_mutex.unlock();
@@ -101,6 +113,12 @@ pub fn getGlobalMeterProvider() *const metrics.MeterProvider {
 /// Set the global meter provider, returns the old provider.
 ///
 /// Callers responsiblitiy to manage the lifecycle of the returned, old provider.
+///
+/// Safety: This function is not safe to call concurrently with
+/// `getGlobalMeterProvider()` or with threads actively using a
+/// reference obtained from a prior call. Provider replacement must occur
+/// only when no other thread holds a reference to the previous provider.
+/// Intended for use during application startup or controlled shutdown only.
 pub fn setGlobalMeterProvider(provider: ?metrics.MeterProvider) !void {
     while (!meter_mutex.tryLock()) {}
     defer meter_mutex.unlock();
@@ -135,6 +153,12 @@ pub fn getGlobalConfigProvider() *const config.ConfigProvider {
 /// Set the global config provider, managing interface wrapper memory internally.
 /// Uses page allocator to manage the interface wrapper memory.
 /// Returns error if allocation fails.
+///
+/// Safety: This function is not safe to call concurrently with
+/// `getGlobalConfigProvider()` or with threads actively using a
+/// reference obtained from a prior call. Provider replacement must occur
+/// only when no other thread holds a reference to the previous provider.
+/// Intended for use during application startup or controlled shutdown only.
 pub fn setGlobalConfigProvider(provider: ?config.ConfigProvider) !void {
     while (!config_mutex.tryLock()) {}
     defer config_mutex.unlock();

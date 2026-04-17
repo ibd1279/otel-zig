@@ -108,11 +108,21 @@ pub const BatchSpanProcessor = struct {
     }
 
     pub fn setExporter(self: *BatchSpanProcessor, exporter: ?SpanExporter) !void {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
+        // Drain all queued spans and wait for in-flight export to complete
+        // before replacing the exporter. forceFlush acquires self.mutex
+        // internally, so it must be called before we acquire it below.
+        _ = self.forceFlush(null);
 
+        self.mutex.lockUncancelable(self.io);
+        const old_exporter = self.exporter;
         if (exporter) |exp| {
             self.exporter = exp;
+        }
+        self.mutex.unlock(self.io);
+
+        if (old_exporter) |old| {
+            old.deinit();
+            old.destroy();
         }
     }
 
@@ -594,4 +604,102 @@ test "BatchSpanProcessor - shutdown behavior" {
     test_span.end(null); // Should be handled gracefully after shutdown
 
     try testing.expectEqual(otel_api.common.FlushResult.failure, processor.forceFlush(null));
+}
+
+test "BatchSpanProcessor - setExporter drains and frees old exporter" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var mock_error_handler = otel_api.common.MockErrorHandler.init(allocator);
+    defer mock_error_handler.deinit();
+    otel_api.common.setMockErrorHandler(&mock_error_handler);
+    defer otel_api.common.clearMockErrorHandler();
+
+    // Create the first mock exporter on the heap so we can inspect it after
+    // setExporter calls deinit() and destroy() on it.
+    const mock_exporter_1 = try allocator.create(MockSpanExporter);
+    mock_exporter_1.* = MockSpanExporter.init(allocator);
+
+    // Create the processor with mock_exporter_1 as the initial exporter.
+    // Ownership of processor transfers to provider via registerProcessor below.
+    const processor = try allocator.create(BatchSpanProcessor);
+    processor.* = BatchSpanProcessor.init(
+        std.testing.io,
+        allocator,
+        mock_exporter_1.spanExporter(),
+        .{ .export_interval_ms = 60_000, .max_queue_size = 10 },
+    );
+
+    const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = .init() }, .keep);
+    defer provider.deinit();
+
+    try provider.registerProcessor(processor.spanProcessor());
+    const tracer = try provider.getTracerWithScope(.empty);
+
+    // Queue 3 spans via onEnd().
+    const make_ctx = struct {
+        fn call(byte: u8) otel_api.trace.Span.Context {
+            return .{
+                .trace_id = .{ .bytes = [_]u8{byte} ** 16 },
+                .span_id = .{ .bytes = [_]u8{byte} ** 8 },
+                .trace_flags = 0,
+                .trace_state = null,
+                .is_remote = false,
+            };
+        }
+    }.call;
+
+    const ctx1 = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, make_ctx(1));
+    defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, ctx1);
+    var s1 = try tracer.startSpan("span-1", .{}, ctx1);
+    defer s1.deinit();
+    s1.end(null);
+
+    const ctx2 = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, make_ctx(2));
+    defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, ctx2);
+    var s2 = try tracer.startSpan("span-2", .{}, ctx2);
+    defer s2.deinit();
+    s2.end(null);
+
+    const ctx3 = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, make_ctx(3));
+    defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, ctx3);
+    var s3 = try tracer.startSpan("span-3", .{}, ctx3);
+    defer s3.deinit();
+    s3.end(null);
+
+    // Verify 3 spans are queued.
+    processor.mutex.lockUncancelable(processor.io);
+    try testing.expectEqual(@as(usize, 3), processor.span_queue.items.len);
+    processor.mutex.unlock(processor.io);
+
+    // Stack bool written by mock_exporter_1.deinit() via deinit_notify.
+    // This lives on the stack so it remains valid after destroy() frees the heap allocation.
+    var exporter_1_deinit_called = false;
+    mock_exporter_1.deinit_notify = &exporter_1_deinit_called;
+
+    // Create the second mock exporter. Ownership transfers to the processor via setExporter;
+    // processor.deinit() (via the outer defer) will call deinit()+destroy() on it.
+    const mock_exporter_2 = try allocator.create(MockSpanExporter);
+    mock_exporter_2.* = MockSpanExporter.init(allocator);
+
+    try processor.setExporter(mock_exporter_2.spanExporter());
+
+    // mock_exporter_1.deinit() must have been called; the flag is on our stack so no UB.
+    try testing.expect(exporter_1_deinit_called);
+
+    // The queue must be empty: setExporter drained via forceFlush before swapping.
+    processor.mutex.lockUncancelable(processor.io);
+    try testing.expectEqual(@as(usize, 0), processor.span_queue.items.len);
+    processor.mutex.unlock(processor.io);
+
+    // Queue 1 more span and flush — it must arrive at mock_exporter_2, not the old one.
+    const ctx4 = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, make_ctx(4));
+    defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, ctx4);
+    var s4 = try tracer.startSpan("span-4", .{}, ctx4);
+    defer s4.deinit();
+    s4.end(null);
+
+    try testing.expectEqual(otel_api.common.FlushResult.success, processor.forceFlush(null));
+    try testing.expectEqual(@as(usize, 1), mock_exporter_2.spanCount());
 }

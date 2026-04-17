@@ -152,6 +152,52 @@ pub const AttributeAggregationMap = struct {
         return entry;
     }
 
+    /// Caller MUST hold `self.mutex` before calling this function.
+    /// Identical to `getOrCreateAggregation` but assumes the lock is already held.
+    pub fn getOrCreateAggregationLocked(
+        self: *AttributeAggregationMap,
+        attributes: []const api.AttributeKeyValue,
+        metadata: sdk.MetricMetadata,
+        metadata_hash: u64,
+        value: sdk.MetricValue,
+    ) *AttributeAggregationEntry {
+        const attr_hash = sdk.computeAttributeHash(attributes, metadata_hash);
+        const combined_hash = (@as(u128, metadata_hash) << 64) | attr_hash;
+
+        if (self.aggregations.get(combined_hash)) |entry| {
+            return entry;
+        }
+
+        const next_free = self.next_free.load(.monotonic);
+
+        if (next_free >= MAX_CARDINALITY) {
+            return &self.overflow_aggregation;
+        }
+
+        const entry = &self.aggregation_pool[next_free];
+
+        const owned_attributes = api.AttributeKeyValue.initOwnedSlice(self.allocator, attributes) catch {
+            return &self.overflow_aggregation;
+        };
+
+        entry.* = .{
+            .aggregation = self.createAggregationForType(metadata, value) catch {
+                return &self.overflow_aggregation;
+            },
+            .attributes = owned_attributes,
+            .metadata = metadata,
+        };
+
+        self.aggregations.put(combined_hash, entry) catch {
+            entry.deinit(self.allocator);
+            return &self.overflow_aggregation;
+        };
+
+        _ = self.next_free.fetchAdd(1, .acq_rel);
+
+        return entry;
+    }
+
     /// Create aggregation of the appropriate type for the instrument
     fn createAggregationForType(self: *AttributeAggregationMap, metadata: sdk.MetricMetadata, value: sdk.MetricValue) !Aggregation {
         return switch (metadata.instrument_type) {

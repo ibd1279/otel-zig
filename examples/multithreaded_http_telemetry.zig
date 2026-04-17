@@ -443,7 +443,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !voi
         errdefer shared_state.allocator.destroy(exporter);
         exporter.* = otel_exporters.otlp.OtlpLogExporter.init(shared_state.allocator, .{ .io = io });
         errdefer exporter.deinit();
-        const processor = try otel_sdk.logs.BatchLogRecordProcessor.init(io, shared_state.allocator, exporter.logRecordExporter(), 5000, 5000);
+        const processor = try otel_sdk.logs.BatchLogRecordProcessor.init(io, shared_state.allocator, exporter.logRecordExporter(), 5000, 5000, try otel_sdk.resource.Resource.initOwned(shared_state.allocator, core_resource));
         errdefer processor.deinit();
         try processor.start();
         try logger_provider.registerProcessor(processor.logProcessor());
@@ -870,6 +870,7 @@ pub fn main(init: std.process.Init) !void {
     print("=" ** 70 ++ "\n", .{});
 
     // Setup logs provider with batch processor and custom resource
+    const log_resource = try createServiceResource(allocator, io);
     var stderr_buffer = [_]u8{0} ** 1024;
     const log_provider = switch (config.exporter_type) {
         .console => blk: {
@@ -877,22 +878,28 @@ pub fn main(init: std.process.Init) !void {
             break :blk try setupCustomLogProvider(
                 allocator,
                 io,
+                log_resource,
                 .{otel_sdk.logs.BatchLogRecordProcessor.PipelineStep.init(.{
                     .io = io,
-                    .export_interval_ms = 5000, // Export logs every 2 seconds
-                    .max_queue_size = 5000, // Queue up to 100 log records
+                    .export_interval_ms = 5000,
+                    .max_queue_size = 5000,
+                    .resource = log_resource,
                 }).flowTo(otel_exporters.stream.LogRecordSink.PipelineStep.init(.{ .writer = &stderr.interface }))},
             );
         },
-        .otlp => try setupCustomLogProvider(
-            allocator,
-            io,
-            .{otel_sdk.logs.BatchLogRecordProcessor.PipelineStep.init(.{
-                .io = io,
-                .export_interval_ms = 5000, // Export logs every 2 seconds
-                .max_queue_size = 5000, // Queue up to 100 log records
-            }).flowTo(otel_exporters.otlp.OtlpLogExporter.PipelineStep.init(.{ .io = io }))},
-        ),
+        .otlp => blk: {
+            break :blk try setupCustomLogProvider(
+                allocator,
+                io,
+                log_resource,
+                .{otel_sdk.logs.BatchLogRecordProcessor.PipelineStep.init(.{
+                    .io = io,
+                    .export_interval_ms = 5000,
+                    .max_queue_size = 5000,
+                    .resource = log_resource,
+                }).flowTo(otel_exporters.otlp.OtlpLogExporter.PipelineStep.init(.{ .io = io }))},
+            );
+        },
     };
     defer {
         log_provider.deinit();
@@ -1225,31 +1232,28 @@ fn setupCustomTraceProvider(allocator: std.mem.Allocator, io: std.Io, sampling_r
 }
 
 /// Custom log provider setup with service name in resource
-fn setupCustomLogProvider(allocator: std.mem.Allocator, io: std.Io, links: anytype) !*otel_sdk.logs.LoggerProvider {
+fn setupCustomLogProvider(allocator: std.mem.Allocator, io: std.Io, resource: otel_sdk.resource.Resource, links: anytype) !*otel_sdk.logs.LoggerProvider {
 
     // 1. Create heap-allocated concrete provider
     const provider_ptr = try allocator.create(otel_sdk.logs.LoggerProvider);
     errdefer allocator.destroy(provider_ptr);
 
-    // 2. Create resource with service name
-    const final_resource = try createServiceResource(allocator, io);
-
-    // 3. Initialize provider with service resource
-    provider_ptr.* = otel_sdk.logs.LoggerProvider.init(allocator, io, final_resource);
+    // 2. Initialize provider with the provided resource (resource is already owned by caller)
+    provider_ptr.* = otel_sdk.logs.LoggerProvider.init(allocator, io, resource);
     errdefer provider_ptr.deinit();
     provider_ptr.default_min_severity = .warn;
 
-    // 4. Configure pipeline using the links tuple
+    // 3. Configure pipeline using the links tuple
     var builder = provider_ptr.pipelineBuilder();
     inline for (links) |link| {
         builder = builder.with(link);
     }
     try builder.done();
 
-    // 5. Register with global registry
+    // 4. Register with global registry
     try otel_api.provider_registry.setGlobalLoggerProvider(provider_ptr.loggerProvider());
 
-    // 6. Return concrete provider pointer for caller management
+    // 5. Return concrete provider pointer for caller management
     return provider_ptr;
 }
 

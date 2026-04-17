@@ -28,6 +28,7 @@ pub const BatchConfig = struct {
     io: ?std.Io = null,
     export_interval_ms: ?u32 = null,
     max_queue_size: ?usize = null,
+    resource: sdk.Resource = sdk.Resource.empty,
 };
 
 /// Batch log record processor that exports log records at regular intervals
@@ -59,6 +60,7 @@ pub const BatchLogRecordProcessor = struct {
             .export_interval_ms = config.export_interval_ms orelse 5000,
             .max_queue_size = config.max_queue_size orelse 2048,
             .log_queue = .empty,
+            .resource = config.resource,
         };
         try self.start();
     }
@@ -83,6 +85,8 @@ pub const BatchLogRecordProcessor = struct {
     /// Initialize a new batch log record processor
     /// export_interval_ms: How often to export log records (default: 5000ms = 5s)
     /// max_queue_size: Maximum log records to queue before dropping (default: 2048)
+    /// resource: The resource to associate with all exported log records. Fixed at
+    ///           creation time per the OpenTelemetry specification.
     ///
     /// Owner of the processor must destroy the memory.
     pub fn init(
@@ -91,6 +95,7 @@ pub const BatchLogRecordProcessor = struct {
         exporter: sdk.LogRecordExporter,
         export_interval_ms: ?u32,
         max_queue_size: ?usize,
+        resource: sdk.Resource,
     ) !*BatchLogRecordProcessor {
         const self = try allocator.create(BatchLogRecordProcessor);
         errdefer allocator.destroy(self);
@@ -111,6 +116,7 @@ pub const BatchLogRecordProcessor = struct {
             .export_interval_ms = export_interval_ms orelse 5000,
             .max_queue_size = max_queue_size orelse 2048,
             .log_queue = .empty,
+            .resource = resource,
         };
 
         return self;
@@ -163,10 +169,10 @@ pub const BatchLogRecordProcessor = struct {
 
     pub fn onEmit(self: *BatchLogRecordProcessor, record: sdk.LogRecord, ctx: []const api.ContextKeyValue, resource: sdk.Resource) void {
         _ = ctx;
+        _ = resource; // resource is fixed at init time per the OTel spec; the parameter is part of the interface
 
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        self.resource = resource;
 
         if (self.is_shutdown.load(.acquire)) {
             return;
@@ -369,3 +375,61 @@ pub const BatchLogRecordProcessor = struct {
         return sdk.LogRecordProcessor{ .bridge = sdk.BridgeLogRecordProcessor.init(self) };
     }
 };
+
+test "BatchLogRecordProcessor - onEmit does not overwrite resource" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // resource_a is the intended resource; it is set at processor init time.
+    const resource_a = try sdk.Resource.initOwned(allocator, .{
+        .attributes = &.{.{ .key = "source", .value = .{ .string = "resource_a" } }},
+    });
+    defer resource_a.deinitOwned(allocator);
+
+    // resource_b simulates a different resource that might be passed via onEmit;
+    // it must never overwrite what was set at init.
+    const resource_b = try sdk.Resource.initOwned(allocator, .{
+        .attributes = &.{.{ .key = "source", .value = .{ .string = "resource_b" } }},
+    });
+    defer resource_b.deinitOwned(allocator);
+
+    // Heap-allocate the mock exporter; the processor takes ownership and will
+    // call deinit() + destroy() on it during processor.deinit().
+    const mock_exporter = try allocator.create(@import("exporter.zig").MockLogRecordExporter);
+    mock_exporter.* = @import("exporter.zig").MockLogRecordExporter.init(allocator);
+
+    const processor = try BatchLogRecordProcessor.init(
+        std.testing.io,
+        allocator,
+        mock_exporter.logRecordExporter(),
+        null,
+        null,
+        resource_a,
+    );
+
+    // Emit two records passing resource_b as the onEmit resource argument.
+    const record: sdk.LogRecord = .{
+        .body = .{ .string = "test" },
+        .severity_number = .info,
+        .observed_timestamp = std.Io.Timestamp.fromNanoseconds(0),
+    };
+    processor.onEmit(record, &.{}, resource_b);
+    processor.onEmit(record, &.{}, resource_b);
+
+    // Force flush so the exporter receives the batch.
+    const result = processor.forceFlush(5000);
+    try testing.expectEqual(api.common.FlushResult.success, result);
+
+    // Verify the exporter was called with resource_a, not resource_b.
+    // These assertions run before processor.deinit() frees the mock exporter.
+    try testing.expectEqual(@as(usize, 2), mock_exporter.recordCount());
+    const exported_resource = mock_exporter.last_resource orelse return error.NoResourceCaptured;
+    try testing.expectEqualStrings(
+        resource_a.attributes[0].value.string,
+        exported_resource.attributes[0].value.string,
+    );
+
+    // processor.deinit() calls exporter.deinit() + exporter.destroy() on mock_exporter.
+    processor.deinit();
+    processor.destroy();
+}

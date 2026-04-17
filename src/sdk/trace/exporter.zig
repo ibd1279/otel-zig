@@ -132,6 +132,9 @@ pub const MockSpanExporter = struct {
     export_result: ExportResult,
     flush_result: ExportResult,
     shutdown_result: ExportResult,
+    /// Optional pointer to a caller-owned bool. When set, deinit() writes true
+    /// through it so callers can observe cleanup without touching freed memory.
+    deinit_notify: ?*bool,
 
     pub fn init(allocator: std.mem.Allocator) MockSpanExporter {
         return .{
@@ -140,10 +143,12 @@ pub const MockSpanExporter = struct {
             .export_result = .success,
             .flush_result = .success,
             .shutdown_result = .success,
+            .deinit_notify = null,
         };
     }
 
     pub fn deinit(self: *MockSpanExporter) void {
+        if (self.deinit_notify) |ptr| ptr.* = true;
         self.exported_spans.deinit(self.allocator);
     }
 

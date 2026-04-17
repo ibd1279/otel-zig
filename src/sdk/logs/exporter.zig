@@ -129,6 +129,7 @@ pub const MockLogRecordExporter = struct {
 
     allocator: std.mem.Allocator,
     exported_records: std.ArrayList(sdk.LogRecord),
+    last_resource: ?sdk.Resource,
     export_result: api.common.ExportResult,
     flush_result: api.common.ExportResult,
     shutdown_result: api.common.ExportResult,
@@ -137,6 +138,7 @@ pub const MockLogRecordExporter = struct {
         return .{
             .allocator = allocator,
             .exported_records = .empty,
+            .last_resource = null,
             .export_result = .success,
             .flush_result = .success,
             .shutdown_result = .success,
@@ -152,7 +154,7 @@ pub const MockLogRecordExporter = struct {
     }
 
     pub fn exportRecords(self: *MockLogRecordExporter, records: []const sdk.LogRecord, resource: sdk.Resource) api.common.ExportResult {
-        _ = resource;
+        self.last_resource = resource;
         for (records) |record| {
             // Deep copy the record since the exporter needs to own the data
             self.exported_records.append(self.allocator, record) catch return .failure;

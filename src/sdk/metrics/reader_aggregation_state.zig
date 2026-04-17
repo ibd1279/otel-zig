@@ -74,7 +74,10 @@ pub const ReaderAggregationState = struct {
         self.aggregations.deinit();
     }
 
-    /// Record a measurement from an instrument (lock-free for aggregation updates)
+    /// Record a measurement from an instrument.
+    /// Holds the aggregation map mutex across both the lookup and the add()/record()
+    /// call so that snapshot() cannot free the entry between the two operations.
+    /// Callers must not hold any other locks when calling this function.
     pub fn recordMeasurement(
         self: *@This(),
         value: sdk.MetricValue,
@@ -82,15 +85,11 @@ pub const ReaderAggregationState = struct {
         metadata: sdk.MetricMetadata,
         metadata_hash: u64,
     ) void {
-        // Lock only for map access
-        const agg = blk: {
-            while (!self.mutex.tryLock()) {}
-            defer self.mutex.unlock();
-            // Get or create aggregation for this instrument + attribute combination
-            break :blk self.aggregations.getOrCreateAggregation(attributes, metadata, metadata_hash, value);
-        };
+        while (!self.aggregations.mutex.tryLock()) {}
+        defer self.aggregations.mutex.unlock();
 
-        // Record the measurement lock-free (aggregations use atomic operations)
+        const agg = self.aggregations.getOrCreateAggregationLocked(attributes, metadata, metadata_hash, value);
+
         switch (metadata.instrument_type) {
             .Counter, .UpDownCounter => switch (value) {
                 .i64 => |v| agg.aggregation.add(v),
@@ -326,3 +325,114 @@ pub const ReaderAggregationState = struct {
         }
     }
 };
+
+test "ReaderAggregationState - concurrent recordMeasurement and snapshot" {
+    // page_allocator is used because testing.allocator is not thread-safe
+    // and GeneralPurposeAllocator was removed in Zig 0.16.
+    const allocator = std.heap.page_allocator;
+
+    var state = try ReaderAggregationState.init(allocator, .delta, defaultAggregationSelector);
+    defer state.deinit();
+
+    const scope: api.InstrumentationScope = .{
+        .name = "test.concurrent",
+        .version = null,
+        .schema_url = null,
+        .attributes = &[_]api.AttributeKeyValue{},
+    };
+    const metadata: sdk.MetricMetadata = .{
+        .name = "test.counter",
+        .description = "stress test counter",
+        .unit = "1",
+        .instrument_type = .Counter,
+        .instrumentation_scope = scope,
+    };
+    const metadata_hash = sdk.MetricMetadata.computeHash(
+        metadata.name,
+        metadata.unit,
+        metadata.instrument_type,
+        &metadata.instrumentation_scope,
+    );
+    const num_writers = 4;
+    const writes_per_writer = 500;
+    const num_collectors = 2;
+    const collections_per_collector = 50;
+
+    // Writer thread: calls recordMeasurement repeatedly.
+    const WriterArgs = struct {
+        state_ptr: *ReaderAggregationState,
+        metadata: sdk.MetricMetadata,
+        metadata_hash: u64,
+    };
+    const writerFn = struct {
+        fn run(args: WriterArgs) void {
+            const attrs = [_]api.AttributeKeyValue{};
+            for (0..writes_per_writer) |_| {
+                args.state_ptr.recordMeasurement(.{ .i64 = 1 }, &attrs, args.metadata, args.metadata_hash);
+            }
+        }
+    }.run;
+
+    // Collector thread: calls collect() repeatedly, freeing each result.
+    const CollectorArgs = struct {
+        state_ptr: *ReaderAggregationState,
+        resource: sdk.Resource,
+    };
+    const collectorFn = struct {
+        fn run(args: CollectorArgs) void {
+            const alloc = std.heap.page_allocator;
+            for (0..collections_per_collector) |_| {
+                const metrics = args.state_ptr.collect(alloc, std.testing.io, args.resource) catch continue;
+                for (metrics) |metric| {
+                    for (metric.data_points) |dp| {
+                        switch (dp.value) {
+                            .i64_histogram => |h| alloc.free(h.bucket_counts),
+                            .f64_histogram => |h| alloc.free(h.bucket_counts),
+                            else => {},
+                        }
+                    }
+                    alloc.free(metric.data_points);
+                }
+                alloc.free(metrics);
+            }
+        }
+    }.run;
+
+    var writer_threads: [num_writers]std.Thread = undefined;
+    var collector_threads: [num_collectors]std.Thread = undefined;
+
+    const writer_args = WriterArgs{
+        .state_ptr = &state,
+        .metadata = metadata,
+        .metadata_hash = metadata_hash,
+    };
+    const collector_args = CollectorArgs{
+        .state_ptr = &state,
+        .resource = sdk.Resource.empty,
+    };
+
+    for (0..num_writers) |i| {
+        writer_threads[i] = try std.Thread.spawn(.{}, writerFn, .{writer_args});
+    }
+    for (0..num_collectors) |i| {
+        collector_threads[i] = try std.Thread.spawn(.{}, collectorFn, .{collector_args});
+    }
+
+    for (writer_threads) |t| t.join();
+    for (collector_threads) |t| t.join();
+
+    // A final collect must not crash and must return a non-negative sum.
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const final_metrics = try state.collect(arena.allocator(), std.testing.io, sdk.Resource.empty);
+    var total_sum: i64 = 0;
+    for (final_metrics) |metric| {
+        for (metric.data_points) |dp| {
+            switch (dp.value) {
+                .i64_sum => |v| total_sum += v,
+                else => {},
+            }
+        }
+    }
+    try std.testing.expect(total_sum >= 0);
+}

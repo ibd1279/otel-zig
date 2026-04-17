@@ -45,6 +45,7 @@ test "BatchLogRecordProcessor basic functionality" {
         mock_exporter.logRecordExporter(),
         100, // short export_interval_ms for test
         10, // max_queue_size
+        sdk.Resource.empty,
     );
 
     // Start the processor thread
