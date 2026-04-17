@@ -83,7 +83,7 @@ pub const Logger = struct {
             const tf = validated_flags orelse if (span_context) |span_ctx| span_ctx.trace_flags else null;
 
             // Fill in timestamps from io clock if not provided by caller
-            const now = std.Io.Clock.real.now(self.provider.io) catch std.Io.Timestamp.zero;
+            const now = std.Io.Clock.real.now(self.provider.io);
             // Construct LogRecord from individual parameters
             const record = sdk.logs.LogRecord{
                 .timestamp = timestamp,

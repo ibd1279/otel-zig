@@ -8,7 +8,7 @@ const otel_api = @import("otel-api");
 const otel_sdk = @import("otel-sdk");
 const otel_exporters = @import("otel-exporters");
 
-var program_start: std.time.Instant = undefined;
+var program_start_ns: i96 = 0;
 
 // Custom exporter to track flush and export calls
 const TrackingExporter = struct {
@@ -61,8 +61,7 @@ const TrackingExporter = struct {
         _ = resource;
         _ = self.export_count.fetchAdd(1, .monotonic);
         _ = global_export_count.fetchAdd(1, .monotonic);
-        const now = std.time.Instant.now() catch return .failure;
-        const current_time: i64 = @intCast(now.since(program_start) / std.time.ns_per_ms);
+        const current_time: i64 = @intCast(@divTrunc(std.Io.Clock.real.now(self.io).nanoseconds - program_start_ns, std.time.ns_per_ms));
         self.last_export_time.store(current_time, .release);
         global_last_export_time.store(current_time, .release);
 
@@ -77,8 +76,7 @@ const TrackingExporter = struct {
         _ = timeout_ms;
         _ = self.flush_count.fetchAdd(1, .monotonic);
         _ = global_flush_count.fetchAdd(1, .monotonic);
-        const now = std.time.Instant.now() catch return .failure;
-        const current_time: i64 = @intCast(now.since(program_start) / std.time.ns_per_ms);
+        const current_time: i64 = @intCast(@divTrunc(std.Io.Clock.real.now(self.io).nanoseconds - program_start_ns, std.time.ns_per_ms));
         self.last_flush_time.store(current_time, .release);
         global_last_flush_time.store(current_time, .release);
 
@@ -101,16 +99,18 @@ const TrackingExporter = struct {
 pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
-    program_start = try std.time.Instant.now();
+    program_start_ns = std.Io.Clock.real.now(io).nanoseconds;
     std.debug.print("\n=== Testing Enhanced forceFlush ===\n\n", .{});
 
     // Setup batch processor with tracking exporter
     const concrete_provider = try otel_sdk.trace.setupGlobalProvider(
         init,
         .{otel_sdk.trace.BatchSpanProcessor.PipelineStep.init(.{
+            .io = io,
             .export_interval_ms = 5000, // 5 second interval
             .max_queue_size = 100,
         }).flowTo(TrackingExporter.PipelineStep.init(io))},
+        null,
     );
     defer {
         concrete_provider.deinit();
@@ -137,17 +137,14 @@ pub fn main(init: std.process.Init) !void {
         try std.Io.sleep(io, .{ .nanoseconds = 100 * std.time.ns_per_ms }, .awake);
     }
 
-    const after_spans_now = try std.time.Instant.now();
-    const after_spans_time: i64 = @intCast(after_spans_now.since(program_start) / std.time.ns_per_ms);
+    const after_spans_time: i64 = @intCast(@divTrunc(std.Io.Clock.real.now(io).nanoseconds - program_start_ns, std.time.ns_per_ms));
     std.debug.print("\nTime after creating spans: {} ms from start\n", .{after_spans_time - start_time});
 
     // Test 1: Force flush should trigger immediate export
     std.debug.print("\n[TEST 1] Calling forceFlush - should trigger immediate export\n", .{});
-    const flush_start_now = try std.time.Instant.now();
+    const flush_start: i64 = @intCast(@divTrunc(std.Io.Clock.real.now(io).nanoseconds - program_start_ns, std.time.ns_per_ms));
     const flush_result = concrete_provider.forceFlush(2000);
-    const flush_end_now = try std.time.Instant.now();
-    const flush_start: i64 = @intCast(flush_start_now.since(program_start) / std.time.ns_per_ms);
-    const flush_end: i64 = @intCast(flush_end_now.since(program_start) / std.time.ns_per_ms);
+    const flush_end: i64 = @intCast(@divTrunc(std.Io.Clock.real.now(io).nanoseconds - program_start_ns, std.time.ns_per_ms));
 
     std.debug.print("ForceFlush result: {}\n", .{flush_result});
     std.debug.print("ForceFlush took {} ms\n", .{flush_end - flush_start});

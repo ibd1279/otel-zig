@@ -38,7 +38,7 @@ pub const ReaderAggregationState = struct {
     // Phase 1b: Attribute-based aggregation map with cardinality limits
     aggregations: sdk.AttributeAggregationMap,
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex,
+    mutex: std.atomic.Mutex,
 
     // Reader's configured temporality
     temporality: AggregationTemporality,
@@ -58,7 +58,7 @@ pub const ReaderAggregationState = struct {
         return .{
             .aggregations = try sdk.AttributeAggregationMap.init(allocator),
             .allocator = allocator,
-            .mutex = .{},
+            .mutex = .unlocked,
             .temporality = temporality,
             .aggregation_selector = aggregation_selector,
             .last_collection_time = std.Io.Timestamp.zero,
@@ -67,7 +67,7 @@ pub const ReaderAggregationState = struct {
 
     /// Clean up all aggregations and resources
     pub fn deinit(self: *@This()) void {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         // Clean up the attribute aggregation map
@@ -84,7 +84,7 @@ pub const ReaderAggregationState = struct {
     ) void {
         // Lock only for map access
         const agg = blk: {
-            self.mutex.lock();
+            while (!self.mutex.tryLock()) {}
             defer self.mutex.unlock();
             // Get or create aggregation for this instrument + attribute combination
             break :blk self.aggregations.getOrCreateAggregation(attributes, metadata, metadata_hash, value);
@@ -115,7 +115,7 @@ pub const ReaderAggregationState = struct {
         var metrics_list = std.ArrayList(sdk.MetricData).empty;
         errdefer metrics_list.deinit(allocator);
 
-        const current_timestamp = std.Io.Clock.real.now(io) catch std.Io.Timestamp.zero;
+        const current_timestamp = std.Io.Clock.real.now(io);
 
         // Process aggregation entries lock-free (atomic reads)
         for (entry_list.items) |*entry| {

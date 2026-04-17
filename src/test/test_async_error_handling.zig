@@ -26,7 +26,7 @@ const SdkObservableCounter = otel_sdk.metrics.SdkObservableCounter;
 const ErrorCapture = struct {
     var captured_errors: std.ArrayList(ErrorInfo) = undefined;
     var allocator: std.mem.Allocator = undefined;
-    var mutex: std.Thread.Mutex = .{};
+    var mutex: std.atomic.Mutex = .unlocked;
 
     fn init(alloc: std.mem.Allocator) void {
         allocator = alloc;
@@ -38,14 +38,14 @@ const ErrorCapture = struct {
     }
 
     fn reset() void {
-        mutex.lock();
+        while (!mutex.tryLock()) {}
         defer mutex.unlock();
         captured_errors.clearRetainingCapacity();
     }
 
     fn captureError(info: ErrorInfo, alloc: ?std.mem.Allocator) void {
         _ = alloc;
-        mutex.lock();
+        while (!mutex.tryLock()) {}
         defer mutex.unlock();
 
         // Clone the error info for our test
@@ -61,13 +61,13 @@ const ErrorCapture = struct {
     }
 
     fn getErrorCount() usize {
-        mutex.lock();
+        while (!mutex.tryLock()) {}
         defer mutex.unlock();
         return captured_errors.items.len;
     }
 
     fn getLastError() ?ErrorInfo {
-        mutex.lock();
+        while (!mutex.tryLock()) {}
         defer mutex.unlock();
         if (captured_errors.items.len == 0) return null;
         return captured_errors.items[captured_errors.items.len - 1];

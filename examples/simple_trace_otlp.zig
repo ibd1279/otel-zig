@@ -17,6 +17,7 @@ pub fn main(init: std.process.Init) !void {
         init,
         .{otel_sdk.trace.BasicSpanProcessor.PipelineStep.init({})
             .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{ .io = io }))},
+        null,
     );
     defer {
         concrete_provider.deinit();

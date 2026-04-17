@@ -194,7 +194,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("===============================\n", .{});
 
     // Measure performance impact
-    try measurePerformanceImpact(allocator);
+    try measurePerformanceImpact(init.io, allocator);
 
     std.debug.print("\n🏗️ Demonstrating error recovery patterns...\n", .{});
     std.debug.print("=============================================\n", .{});
@@ -213,6 +213,7 @@ fn setupOpenTelemetryWithErrors(init: std.process.Init) !*otel_sdk.trace.TracerP
         init,
         .{otel_sdk.trace.BasicSpanProcessor.PipelineStep.init({})
             .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{ .io = init.io }))},
+        null,
     );
 }
 
@@ -319,7 +320,7 @@ fn demonstrateErrorTypes() !void {
     });
 }
 
-fn measurePerformanceImpact(allocator: std.mem.Allocator) !void {
+fn measurePerformanceImpact(io: std.Io, allocator: std.mem.Allocator) !void {
     _ = allocator;
     const scope = otel_api.InstrumentationScope{ .name = "perf-test", .version = "1.0.0" };
     var tracer = try otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
@@ -333,15 +334,15 @@ fn measurePerformanceImpact(allocator: std.mem.Allocator) !void {
     std.debug.print("Running {} setAttribute operations...\n", .{iterations});
 
     // Measure setAttribute performance
-    const start_instant = try std.time.Instant.now();
+    const start_ts = std.Io.Clock.real.now(io);
 
     for (0..iterations) |i| {
         const key = if (i % 100 == 0) "" else "test.key"; // 1% invalid keys
         span.setAttribute(.{ .key = key, .value = .{ .int = @intCast(i) } });
     }
 
-    const end_instant = try std.time.Instant.now();
-    const duration_ns: i64 = @intCast(end_instant.since(start_instant));
+    const end_ts = std.Io.Clock.real.now(io);
+    const duration_ns: i64 = @intCast(end_ts.nanoseconds - start_ts.nanoseconds);
     const ns_per_op = @divTrunc(duration_ns, iterations);
 
     std.debug.print("Performance results:\n", .{});

@@ -47,12 +47,12 @@ pub const PeriodicReader = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     exporter: ?sdk.MetricExporter,
-    mutex: std.Thread.Mutex,
-    condition: std.Thread.Condition,
+    mutex: std.Io.Mutex,
+    condition: std.Io.Condition,
     is_shutdown: std.atomic.Value(bool),
     is_running: std.atomic.Value(bool),
     collection_in_progress: std.atomic.Value(bool),
-    collection_complete: std.Thread.Condition,
+    collection_complete: std.Io.Condition,
     thread: ?std.Thread,
     collection_interval_ms: u32,
     registered_meters: std.ArrayListUnmanaged(*sdk.Meter),
@@ -71,15 +71,15 @@ pub const PeriodicReader = struct {
             .allocator = allocator,
             .io = io,
             .exporter = exporter,
-            .mutex = .{},
-            .condition = .{},
+            .mutex = std.Io.Mutex.init,
+            .condition = std.Io.Condition.init,
             .is_shutdown = std.atomic.Value(bool).init(false),
             .is_running = std.atomic.Value(bool).init(false),
             .collection_in_progress = std.atomic.Value(bool).init(false),
-            .collection_complete = .{},
+            .collection_complete = std.Io.Condition.init,
             .thread = null,
             .collection_interval_ms = collection_interval_ms orelse 60000, // 60 seconds default
-            .registered_meters = .{},
+            .registered_meters = .empty,
             .reader_state = try sdk.ReaderAggregationState.init(
                 allocator,
                 .delta, // Default to Delta temporality for now
@@ -90,8 +90,8 @@ pub const PeriodicReader = struct {
 
     /// Start the background collection thread
     pub fn start(self: *PeriodicReader) !void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.is_running.load(.acquire) or self.thread != null) {
             return;
@@ -103,13 +103,9 @@ pub const PeriodicReader = struct {
 
     /// Stop the background collection thread and clean up resources
     pub fn deinit(self: *PeriodicReader) void {
-        // Signal shutdown
+        // Signal shutdown; the collection thread will observe this after its sleep expires
         self.is_shutdown.store(true, .release);
         self.is_running.store(false, .release);
-
-        self.mutex.lock();
-        self.condition.signal();
-        self.mutex.unlock();
 
         // Wait for thread to finish
         if (self.thread) |thread| {
@@ -166,7 +162,7 @@ pub const PeriodicReader = struct {
         // at this point we are the lucky thread that got false when it did the swap above.
         defer {
             self.collection_in_progress.store(false, .release);
-            self.collection_complete.broadcast();
+            self.collection_complete.broadcast(self.io);
         }
 
         // trigger the observables to write their data to the aggregation state.
@@ -189,11 +185,11 @@ pub const PeriodicReader = struct {
     }
 
     pub fn collect(self: *PeriodicReader) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         while (self.collection_in_progress.load(.acquire)) {
-            self.collection_complete.wait(&self.mutex);
+            self.collection_complete.waitUncancelable(self.io, &self.mutex);
         }
 
         self.internalCollect();
@@ -201,24 +197,21 @@ pub const PeriodicReader = struct {
 
     /// Force flush the exporter
     pub fn forceFlush(self: *PeriodicReader, timeout_ms: ?u64) api.common.FlushResult {
-        const start_ts = std.Io.Clock.real.now(self.io) catch std.Io.Timestamp.zero;
+        const start_ts = std.Io.Clock.real.now(self.io);
 
         // force flush has to cascade to the exporter as well, but we don't need to hold the mutex for that part.
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
             // Wait for any existing collection to complete
             while (self.collection_in_progress.load(.acquire)) {
                 if (timeout_ms) |collection_timeout| {
-                    const now_ts = std.Io.Clock.real.now(self.io) catch std.Io.Timestamp.zero;
+                    const now_ts = std.Io.Clock.real.now(self.io);
                     const elapsed_ms: u64 = @intCast(@max(0, @divTrunc(now_ts.nanoseconds - start_ts.nanoseconds, std.time.ns_per_ms)));
                     if (elapsed_ms >= collection_timeout) return .timeout;
-                    self.collection_complete.timedWait(&self.mutex, (collection_timeout - elapsed_ms) * std.time.ns_per_ms) catch {
-                        return .timeout;
-                    };
+                    self.collection_complete.waitUncancelable(self.io, &self.mutex);
                 } else {
-                    self.collection_complete.wait(&self.mutex);
-                    // block.
+                    self.collection_complete.waitUncancelable(self.io, &self.mutex);
                 }
             }
             self.internalCollect();
@@ -227,7 +220,7 @@ pub const PeriodicReader = struct {
         // Flush the exporter
         return if (self.exporter) |exporter| blk: {
             if (timeout_ms) |collection_timeout| {
-                const now_ts = std.Io.Clock.real.now(self.io) catch std.Io.Timestamp.zero;
+                const now_ts = std.Io.Clock.real.now(self.io);
                 const elapsed_ms: u64 = @intCast(@max(0, @divTrunc(now_ts.nanoseconds - start_ts.nanoseconds, std.time.ns_per_ms)));
                 if (elapsed_ms >= collection_timeout) return .timeout;
                 break :blk exporter.forceFlush(collection_timeout - elapsed_ms).asFlushResult();
@@ -239,15 +232,15 @@ pub const PeriodicReader = struct {
 
     /// Shutdown the processor
     pub fn shutdown(self: *PeriodicReader, timeout_ms: ?u64) api.common.ProcessResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.is_shutdown.swap(true, .seq_cst)) {
             return .success;
         }
 
         self.is_running.store(false, .release);
-        self.condition.signal();
+        self.condition.signal(self.io);
 
         // Shutdown the exporter
         const result = if (self.exporter) |*exporter| exporter.shutdown(timeout_ms) else .success;
@@ -256,21 +249,27 @@ pub const PeriodicReader = struct {
 
     /// Register a meter for periodic collection
     pub fn registerMeter(self: *PeriodicReader, meter: *sdk.Meter) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.is_shutdown.load(.acquire)) return;
 
-        self.registered_meters.append(self.allocator, meter) catch {
-            // Handle allocation failure silently for now
+        self.registered_meters.append(self.allocator, meter) catch |err| {
+            api.common.reportError(.{
+                .component = .meter,
+                .operation = "registerMeter",
+                .error_type = .resource_exhausted,
+                .message = "Failed to register meter with periodic reader",
+                .source_error = err,
+            });
             return;
         };
     }
 
     /// Unregister a meter from periodic collection
     pub fn unregisterMeter(self: *PeriodicReader, meter: *sdk.Meter) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.is_shutdown.load(.acquire)) return;
 
@@ -284,18 +283,22 @@ pub const PeriodicReader = struct {
 
     /// Unregister all meters from periodic collection
     pub fn unregisterAllMeters(self: *PeriodicReader) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         self.registered_meters.clearAndFree(self.allocator);
     }
 
     pub fn setResource(self: *PeriodicReader, resource: sdk.Resource) void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         self.resource = resource;
     }
 
     /// Set the exporter for this processor
     pub fn setExporter(self: *PeriodicReader, exporter: ?sdk.MetricExporter) !void {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         if (self.exporter) |old_exporter| {
             old_exporter.deinit();
             old_exporter.destroy();
@@ -311,37 +314,25 @@ pub const PeriodicReader = struct {
     /// Background thread function that periodically collects metrics
     fn collectionThreadFn(self: *PeriodicReader) void {
         while (true) {
-            // Fast path check without mutex
-            if (self.is_shutdown.load(.acquire)) {
-                break;
-            }
+            if (self.is_shutdown.load(.acquire)) break;
 
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            // Sleep for the collection interval; shutdown wakes us via condition signal
+            const duration = std.Io.Duration.fromMilliseconds(@intCast(self.collection_interval_ms));
+            std.Io.sleep(self.io, duration, .awake) catch {};
 
-            // Calculate wait time in nanoseconds
-            const wait_ns = @as(u64, self.collection_interval_ms) * std.time.ns_per_ms;
+            if (self.is_shutdown.load(.acquire)) break;
 
-            // Wait for the specified interval or until signaled
-            self.condition.timedWait(&self.mutex, wait_ns) catch {
-                // Timeout - normal collection cycle
-            };
-
-            // > Given timedWait() can be interrupted spuriously, the blocking condition
-            // > should be checked continuously irrespective of any notifications from
-            // > signal() or broadcast().
-            if (self.is_shutdown.load(.acquire)) {
-                break;
-            }
-
-            // Try to acquire collection lock
-            // Is this possible? collection requires the mutex, no?
             if (self.collection_in_progress.load(.acquire)) {
                 // Already collecting, skip this cycle
                 continue;
             }
 
+            // Acquire mutex to match collect() and forceFlush() — prevents
+            // registerMeter/unregisterMeter from mutating registered_meters
+            // while internalCollect iterates it.
+            self.mutex.lockUncancelable(self.io);
             self.internalCollect();
+            self.mutex.unlock(self.io);
         }
     }
 };
@@ -361,7 +352,7 @@ test "BasicPeriodicProcessor - direct init vs pipeline init thread behavior" {
 
     var threaded = std.Io.Threaded.init(allocator, .{ .environ = .empty });
     defer threaded.deinit();
-    const io = threaded.ioBasic();
+    const io = threaded.io();
 
     // Create processor with very short interval for testing (direct init)
     const processor = try allocator.create(PeriodicReader);
@@ -445,7 +436,7 @@ test "PeriodicReader and Observable instrument test." {
 
     var threaded = std.Io.Threaded.init(allocator, .{ .environ = .empty });
     defer threaded.deinit();
-    const io = threaded.ioBasic();
+    const io = threaded.io();
 
     // Create mock exporter
     const mock_exporter = try allocator.create(MockExporter);

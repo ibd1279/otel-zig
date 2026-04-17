@@ -44,7 +44,7 @@ pub const AttributeAggregationMap = struct {
     allocator: std.mem.Allocator,
 
     // Lock to prevent map corruption
-    mutex: std.Thread.Mutex,
+    mutex: std.atomic.Mutex,
 
     /// Initialize the attribute aggregation map
     pub fn init(allocator: std.mem.Allocator) !AttributeAggregationMap {
@@ -72,13 +72,13 @@ pub const AttributeAggregationMap = struct {
                     },
                 },
             },
-            .mutex = .{},
+            .mutex = .unlocked,
         };
     }
 
     /// Clean up all resources
     pub fn deinit(self: *AttributeAggregationMap) void {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         // Clean up aggregation entries that need allocator cleanup
@@ -102,7 +102,7 @@ pub const AttributeAggregationMap = struct {
         // This key is overkill, but designed for future expansion.
         const combined_hash = (@as(u128, metadata_hash) << 64) | attr_hash;
 
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         // Check if aggregation entry already exists
@@ -204,7 +204,7 @@ pub const AttributeAggregationMap = struct {
         entry_list: *std.ArrayList(AttributeAggregationEntry),
         io: std.Io,
     ) !void {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         // append the points to the snapshot.

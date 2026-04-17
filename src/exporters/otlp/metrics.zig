@@ -37,7 +37,7 @@ pub const OtlpMetricExporter = struct {
     config: OtlpExporterConfig,
     allocator: std.mem.Allocator,
     is_shutdown: bool = false,
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
 
     pub fn init(allocator: std.mem.Allocator, config: OtlpExporterConfig) OtlpMetricExporter {
         return .{
@@ -55,8 +55,8 @@ pub const OtlpMetricExporter = struct {
     }
 
     pub fn exportMetrics(self: *OtlpMetricExporter, metrics: []const MetricData) ExportResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.config.io);
+        defer self.mutex.unlock(self.config.io);
 
         if (self.is_shutdown) {
             return .failure;
@@ -100,8 +100,8 @@ pub const OtlpMetricExporter = struct {
     }
 
     pub fn shutdown(self: *OtlpMetricExporter, timeout_ms: ?u64) ExportResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.config.io);
+        defer self.mutex.unlock(self.config.io);
 
         _ = timeout_ms;
         self.is_shutdown = true;

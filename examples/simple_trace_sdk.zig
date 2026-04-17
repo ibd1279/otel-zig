@@ -22,6 +22,7 @@ pub fn main(init: std.process.Init) !void {
             .writer = &stderr.interface,
             .flush_after_each = true,
         }))},
+        null,
     );
     defer {
         concrete_provider.deinit();

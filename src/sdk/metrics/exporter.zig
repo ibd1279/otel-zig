@@ -125,7 +125,7 @@ pub const MockMetricExporter = struct {
     export_result: api.common.ExportResult,
     flush_result: api.common.ExportResult,
     shutdown_result: api.common.ExportResult,
-    mutex: std.Thread.Mutex,
+    mutex: std.atomic.Mutex,
 
     pub fn init(allocator: std.mem.Allocator) MockMetricExporter {
         return .{
@@ -135,7 +135,7 @@ pub const MockMetricExporter = struct {
             .export_result = .success,
             .flush_result = .success,
             .shutdown_result = .success,
-            .mutex = .{},
+            .mutex = .unlocked,
         };
     }
 
@@ -159,7 +159,7 @@ pub const MockMetricExporter = struct {
     pub fn exportMetrics(self: *MockMetricExporter, metrics: []const sdk.MetricData) api.common.ExportResult {
         _ = self.export_count.fetchAdd(1, .acq_rel);
 
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         for (metrics) |metric| {
@@ -218,14 +218,14 @@ pub const MockMetricExporter = struct {
 
     // Test helpers
     pub fn clearMetrics(self: *MockMetricExporter) void {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         self.exported_metrics.clearRetainingCapacity();
     }
 
     pub fn metricCount(self: *MockMetricExporter) usize {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         return self.exported_metrics.items.len;
@@ -240,7 +240,7 @@ pub const MockMetricExporter = struct {
     }
 
     pub fn getMetric(self: *MockMetricExporter, index: usize) ?sdk.MetricData {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (index >= self.exported_metrics.items.len) return null;
@@ -250,7 +250,7 @@ pub const MockMetricExporter = struct {
     /// Get metrics matching the provided name, writing them into the provided buffer.
     /// Returns a slice of the buffer containing the matching metrics.
     pub fn getMetricsNamed(self: *MockMetricExporter, buffer: []sdk.MetricData, name: []const u8) []sdk.MetricData {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         var count: usize = 0;

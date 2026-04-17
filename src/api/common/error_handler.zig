@@ -104,7 +104,7 @@ pub const ErrorType = enum {
 
 /// Global error handler state
 var global_error_handler: ?ErrorHandler = null;
-var handler_mutex: std.Thread.Mutex = .{};
+var handler_mutex: std.atomic.Mutex = .unlocked;
 
 /// Returns true if input validation should be performed throughout the OpenTelemetry API.
 ///
@@ -206,7 +206,7 @@ fn defaultErrorHandler(info: ErrorInfo, allocator: ?std.mem.Allocator) void {
 /// This function allows applications to customize how OpenTelemetry errors
 /// are handled. Pass null to reset to the default handler.
 pub fn setGlobalErrorHandler(handler: ?ErrorHandler) void {
-    handler_mutex.lock();
+    while (!handler_mutex.tryLock()) {}
     defer handler_mutex.unlock();
 
     global_error_handler = handler;
@@ -214,7 +214,7 @@ pub fn setGlobalErrorHandler(handler: ?ErrorHandler) void {
 
 /// Get the current global error handler
 pub fn getGlobalErrorHandler() ?ErrorHandler {
-    handler_mutex.lock();
+    while (!handler_mutex.tryLock()) {}
     defer handler_mutex.unlock();
 
     return global_error_handler;
@@ -226,7 +226,7 @@ pub fn getGlobalErrorHandler() ?ErrorHandler {
 /// errors that would otherwise be suppressed. The error will be handled
 /// by the currently configured error handler.
 pub fn reportError(info: ErrorInfo) void {
-    handler_mutex.lock();
+    while (!handler_mutex.tryLock()) {}
     const handler = global_error_handler orelse defaultErrorHandler;
     handler_mutex.unlock();
 
@@ -240,7 +240,7 @@ pub fn reportError(info: ErrorInfo) void {
 /// This variant allows the error handler to perform detailed message formatting
 /// if an allocator is provided.
 pub fn reportErrorWithAllocator(info: ErrorInfo, allocator: std.mem.Allocator) void {
-    handler_mutex.lock();
+    while (!handler_mutex.tryLock()) {}
     const handler = global_error_handler orelse defaultErrorHandler;
     handler_mutex.unlock();
 
@@ -520,23 +520,31 @@ pub const MockErrorHandler = struct {
 
 /// Global mock error handler instance for testing
 var global_mock_handler: ?*MockErrorHandler = null;
-var mock_handler_mutex: std.Thread.Mutex = .{};
+var mock_handler_mutex: std.atomic.Mutex = .unlocked;
 
 /// Set a mock error handler for testing
 pub fn setMockErrorHandler(mock_handler: *MockErrorHandler) void {
-    mock_handler_mutex.lock();
-    defer mock_handler_mutex.unlock();
-
-    global_mock_handler = mock_handler;
+    // Update global_mock_handler under mock_handler_mutex, then register the
+    // dispatch function outside that lock. Keeping setGlobalErrorHandler inside
+    // the lock would create an AB/BA deadlock: this function holds
+    // mock_handler_mutex while acquiring handler_mutex, and
+    // mockErrorHandlerDispatch (called under handler_mutex) acquires
+    // mock_handler_mutex.
+    {
+        while (!mock_handler_mutex.tryLock()) {}
+        defer mock_handler_mutex.unlock();
+        global_mock_handler = mock_handler;
+    }
     setGlobalErrorHandler(mockErrorHandlerDispatch);
 }
 
 /// Clear the mock error handler and restore default behavior
 pub fn clearMockErrorHandler() void {
-    mock_handler_mutex.lock();
-    defer mock_handler_mutex.unlock();
-
-    global_mock_handler = null;
+    {
+        while (!mock_handler_mutex.tryLock()) {}
+        defer mock_handler_mutex.unlock();
+        global_mock_handler = null;
+    }
     setGlobalErrorHandler(null);
 }
 
@@ -544,7 +552,7 @@ pub fn clearMockErrorHandler() void {
 fn mockErrorHandlerDispatch(info: ErrorInfo, allocator: ?std.mem.Allocator) void {
     _ = allocator;
 
-    mock_handler_mutex.lock();
+    while (!mock_handler_mutex.tryLock()) {}
     defer mock_handler_mutex.unlock();
 
     if (global_mock_handler) |mock_handler| {

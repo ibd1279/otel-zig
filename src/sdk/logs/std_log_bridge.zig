@@ -50,11 +50,11 @@ const BridgeState = struct {
 
 /// Global bridge state
 var bridge_state: BridgeState = undefined;
-var bridge_mutex = std.Thread.Mutex{};
+var bridge_mutex: std.atomic.Mutex = .unlocked;
 
 /// Initialize the std.log bridge
 pub fn init(config: BridgeConfig) !void {
-    bridge_mutex.lock();
+    while (!bridge_mutex.tryLock()) {}
     defer bridge_mutex.unlock();
 
     if (bridge_state.initialized.load(.acquire)) return;
@@ -81,7 +81,7 @@ pub fn init(config: BridgeConfig) !void {
 
 /// Deinitialize the std.log bridge
 pub fn deinit() void {
-    bridge_mutex.lock();
+    while (!bridge_mutex.tryLock()) {}
     defer bridge_mutex.unlock();
 
     if (!bridge_state.initialized.load(.acquire)) return;
@@ -92,7 +92,7 @@ pub fn deinit() void {
 
 /// Update bridge configuration at runtime
 pub fn updateConfig(config: BridgeConfig) void {
-    bridge_mutex.lock();
+    while (!bridge_mutex.tryLock()) {}
     defer bridge_mutex.unlock();
 
     if (bridge_state.initialized.load(.acquire)) {

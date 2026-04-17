@@ -114,7 +114,7 @@ pub fn SumAggregation(comptime T: type) type {
 
         pub fn reset(self: *@This(), io: std.Io) void {
             self.value.store(0, .monotonic);
-            self.start_timestamp = std.Io.Clock.real.now(io) catch std.Io.Timestamp.zero;
+            self.start_timestamp = std.Io.Clock.real.now(io);
         }
     };
 }
@@ -306,7 +306,7 @@ pub fn HistogramAggregation(comptime T: type) type {
             self.count.store(0, .monotonic);
             self.min.store(0, .monotonic);
             self.max.store(0, .monotonic);
-            self.start_timestamp = std.Io.Clock.real.now(io) catch std.Io.Timestamp.zero;
+            self.start_timestamp = std.Io.Clock.real.now(io);
         }
     };
 }

@@ -25,14 +25,14 @@ const SdkObservableGauge = otel_sdk.metrics.SdkObservableGauge;
 
 // Thread-safe test state
 const ThreadSafeState = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.atomic.Mutex = .unlocked,
     counter: u32 = 0,
     thread_id: std.atomic.Value(u32) = .init(0),
     operations: std.atomic.Value(u32) = .init(0),
     errors: std.atomic.Value(u32) = .init(0),
 
     fn incrementCounter(self: *ThreadSafeState) u32 {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
         self.counter += 1;
         return self.counter;
@@ -78,7 +78,7 @@ fn heavyThreadSafeCallback(result: *ObservableResult(i64), state: *ThreadSafeSta
     state.recordOperation(@intCast(thread_id));
 
     // Simulate some work
-    std.time.sleep(5 * std.time.ns_per_ms);
+    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
 
     for (0..3) |i| {
         const value = state.incrementCounter();
@@ -123,7 +123,7 @@ test "concurrent callback registration" {
                 args.handles_start[i] = args.counter_ptr.registerCallback(callback);
 
                 // Small delay to increase chance of race conditions
-                std.time.sleep(1 * std.time.ns_per_ms);
+                std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
             }
         }
     };
@@ -222,7 +222,7 @@ test "concurrent collection" {
                 args.results_ptr[i] = metrics.len > 0;
 
                 // Small delay to increase thread interleaving
-                std.time.sleep(2 * std.time.ns_per_ms);
+                std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
             }
         }
     };
@@ -297,9 +297,9 @@ test "race conditions during registration and collection" {
                     const callback = createTypeErasedCallback(i64, ThreadSafeState, threadSafeCallback, args.state_ptr);
                     const handle = args.counter_ptr.registerCallback(callback);
 
-                    std.time.sleep(5 * std.time.ns_per_ms);
+                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
                     handle.unregister();
-                    std.time.sleep(2 * std.time.ns_per_ms);
+                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
                 }
             } else if (thread_id < 4) {
                 // Collection threads
@@ -307,7 +307,7 @@ test "race conditions during registration and collection" {
                     const metrics = args.counter_ptr.collect(args.allocator_ptr) catch continue;
                     defer args.allocator_ptr.free(metrics);
 
-                    std.time.sleep(3 * std.time.ns_per_ms);
+                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
                 }
             } else {
                 // Mixed operation threads
@@ -317,7 +317,7 @@ test "race conditions during registration and collection" {
                         const handle = args.counter_ptr.registerCallback(callback);
                         defer handle.unregister();
 
-                        std.time.sleep(1 * std.time.ns_per_ms);
+                        std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
                     } else {
                         const metrics = args.counter_ptr.collect(args.allocator_ptr) catch continue;
                         defer args.allocator_ptr.free(metrics);
@@ -396,7 +396,7 @@ test "thread safety of callback metrics" {
                 const all_callback_metrics = args.gauge_ptr.getAllCallbackMetrics(args.allocator_ptr) catch continue;
                 defer args.allocator_ptr.free(all_callback_metrics);
 
-                std.time.sleep(1 * std.time.ns_per_ms);
+                std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
             }
         }
     };
@@ -503,7 +503,7 @@ test "stress test with many concurrent operations" {
 
                 // Small delay to increase concurrency
                 if (op % 5 == 0) {
-                    std.time.sleep(1 * std.time.ns_per_ms);
+                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
                 }
             }
         }

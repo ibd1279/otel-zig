@@ -55,14 +55,14 @@ pub const BasicSpanProcessor = struct {
 
     allocator: std.mem.Allocator,
     exporter: ?SpanExporter,
-    mutex: std.Thread.Mutex,
+    mutex: std.atomic.Mutex,
     is_shutdown: bool,
 
     pub fn init(allocator: std.mem.Allocator, exporter: ?SpanExporter) BasicSpanProcessor {
         return .{
             .allocator = allocator,
             .exporter = exporter,
-            .mutex = .{},
+            .mutex = .unlocked,
             .is_shutdown = false,
         };
     }
@@ -92,7 +92,7 @@ pub const BasicSpanProcessor = struct {
     }
 
     pub fn onEnd(self: *BasicSpanProcessor, span: sdk.trace.SpanData, resource: Resource) void {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (self.is_shutdown) {
@@ -117,7 +117,7 @@ pub const BasicSpanProcessor = struct {
     }
 
     pub fn forceFlush(self: *BasicSpanProcessor, timeout_ms: ?u64) otel_api.common.FlushResult {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (self.is_shutdown) {
@@ -130,7 +130,7 @@ pub const BasicSpanProcessor = struct {
     }
 
     pub fn shutdown(self: *BasicSpanProcessor, timeout_ms: ?u64) ProcessResult {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (self.is_shutdown) {

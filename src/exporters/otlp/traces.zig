@@ -41,14 +41,14 @@ pub const OtlpTraceExporter = struct {
     config: OtlpExporterConfig,
     allocator: std.mem.Allocator,
     is_shutdown: bool,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub fn init(allocator: std.mem.Allocator, config: OtlpExporterConfig) OtlpTraceExporter {
         return .{
             .config = config,
             .allocator = allocator,
             .is_shutdown = false,
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
         };
     }
 
@@ -61,8 +61,8 @@ pub const OtlpTraceExporter = struct {
     }
 
     pub fn exportSpans(self: *OtlpTraceExporter, spans: []const otel_sdk.trace.SpanData, resource: Resource) ExportResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.config.io);
+        defer self.mutex.unlock(self.config.io);
 
         if (self.is_shutdown) {
             return .failure;
@@ -113,8 +113,8 @@ pub const OtlpTraceExporter = struct {
     }
 
     pub fn shutdown(self: *OtlpTraceExporter, timeout_ms: ?u64) ExportResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.config.io);
+        defer self.mutex.unlock(self.config.io);
 
         if (self.is_shutdown) {
             return .success;

@@ -35,14 +35,14 @@ pub const SimpleLogRecordProcessor = struct {
 
     allocator: std.mem.Allocator,
     exporter: ?sdk.LogRecordExporter,
-    mutex: std.Thread.Mutex,
+    mutex: std.atomic.Mutex,
     is_shutdown: bool,
 
     pub fn init(allocator: std.mem.Allocator, exporter: ?sdk.LogRecordExporter) SimpleLogRecordProcessor {
         return .{
             .allocator = allocator,
             .exporter = exporter,
-            .mutex = .{},
+            .mutex = .unlocked,
             .is_shutdown = false,
         };
     }
@@ -69,7 +69,7 @@ pub const SimpleLogRecordProcessor = struct {
     pub fn onEmit(self: *SimpleLogRecordProcessor, record: sdk.LogRecord, ctx: []const api.ContextKeyValue, resource: sdk.Resource) void {
         _ = ctx;
 
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (self.is_shutdown) {
@@ -95,7 +95,7 @@ pub const SimpleLogRecordProcessor = struct {
     }
 
     pub fn forceFlush(self: *SimpleLogRecordProcessor, timeout_ms: ?u64) api.common.FlushResult {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (self.is_shutdown) {
@@ -108,7 +108,7 @@ pub const SimpleLogRecordProcessor = struct {
     }
 
     pub fn shutdown(self: *SimpleLogRecordProcessor, timeout_ms: ?u64) api.common.ProcessResult {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (self.is_shutdown) {

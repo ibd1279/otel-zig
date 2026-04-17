@@ -35,13 +35,13 @@ const Resource = otel_sdk.resource.Resource;
 
 // Test state for concurrent access
 const ConcurrentState = struct {
-    mutex: std.Thread.Mutex = .{},
+    mutex: std.atomic.Mutex = .unlocked,
     counter: u32 = 0,
     values: [10]i64 = undefined,
     collection_count: std.atomic.Value(u32) = .init(0),
 
     fn increment(self: *ConcurrentState) void {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
         self.counter += 1;
     }
@@ -56,7 +56,7 @@ const ConcurrentState = struct {
 
     fn getValue(self: *ConcurrentState, index: usize) i64 {
         if (index >= self.values.len) return 0;
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
         return self.values[index];
     }
@@ -76,7 +76,7 @@ fn concurrentCallback(result: *ObservableResult(i64), state: *ConcurrentState) v
     state.markCollection();
 
     // Simulate some work
-    std.time.sleep(1 * std.time.ns_per_ms);
+    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
 
     const attrs = [_]AttributeKeyValue{
         .{ .key = "worker", .value = .{ .string = "concurrent" } },
@@ -138,7 +138,7 @@ test "basic integration with metric collection" {
     // Verify integration by checking that callbacks are executed when instruments are enabled
     for (0..3) |cycle| {
         // Wait for some time to simulate collection intervals
-        std.time.sleep(100 * std.time.ns_per_ms);
+        std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(100), .awake) catch {};
 
         // Verify that the instruments are enabled and would be collected
         try testing.expect(counter.enabled());

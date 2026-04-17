@@ -26,12 +26,12 @@ const ErrorHandler = otel_api.common.ErrorHandler;
 
 /// Simple error capture for testing
 var test_errors: std.ArrayList(ErrorInfo) = undefined;
-var test_mutex: std.Thread.Mutex = std.Thread.Mutex{};
+var test_mutex: std.atomic.Mutex = .unlocked;
 var test_allocator: std.mem.Allocator = undefined;
 
 fn testErrorHandler(info: ErrorInfo, allocator: ?std.mem.Allocator) void {
     _ = allocator;
-    test_mutex.lock();
+    while (!test_mutex.tryLock()) {}
     defer test_mutex.unlock();
     test_errors.append(test_allocator, info) catch {};
 }
@@ -48,13 +48,13 @@ fn cleanupTestCapture() void {
 }
 
 fn getErrorCount() usize {
-    test_mutex.lock();
+    while (!test_mutex.tryLock()) {}
     defer test_mutex.unlock();
     return test_errors.items.len;
 }
 
 fn clearErrors() void {
-    test_mutex.lock();
+    while (!test_mutex.tryLock()) {}
     defer test_mutex.unlock();
     test_errors.clearRetainingCapacity();
 }
@@ -100,7 +100,7 @@ test "error handler preserves error information" {
     // Verify error details
     try testing.expectEqual(@as(usize, 1), getErrorCount());
 
-    test_mutex.lock();
+    while (!test_mutex.tryLock()) {}
     defer test_mutex.unlock();
 
     const captured = test_errors.items[0];

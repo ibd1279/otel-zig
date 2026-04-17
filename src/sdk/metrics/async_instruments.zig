@@ -60,7 +60,7 @@ pub fn Observable(comptime T: type) type {
         next_callback_id: u64,
 
         /// Configuration and state
-        mutex: std.Thread.Mutex,
+        mutex: std.atomic.Mutex,
         config: AsyncInstrumentConfig,
 
         // Internal metrics instruments (if measure_callbacks is true)
@@ -173,7 +173,7 @@ pub fn Observable(comptime T: type) type {
                 .metadata_hash = metadata_hash,
                 .callbacks = .empty,
                 .next_callback_id = 1,
-                .mutex = std.Thread.Mutex{},
+                .mutex = .unlocked,
                 .config = config,
                 .callback_duration_histogram = callback_duration_histogram,
                 .callback_executions_counter = callback_executions_counter,
@@ -185,7 +185,7 @@ pub fn Observable(comptime T: type) type {
 
         /// Clean up resources
         pub fn deinit(self: *Self, _: std.mem.Allocator) void {
-            self.mutex.lock();
+            while (!self.mutex.tryLock()) {}
             defer self.mutex.unlock();
 
             // Free owned advisory params
@@ -218,7 +218,7 @@ pub fn Observable(comptime T: type) type {
 
         /// Register a callback
         pub fn registerCallback(self: *Self, callback: api.metrics.TypeErasedCallback(T)) api.metrics.CallbackHandle {
-            self.mutex.lock();
+            while (!self.mutex.tryLock()) {}
             defer self.mutex.unlock();
 
             const callback_id = self.next_callback_id;
@@ -241,7 +241,7 @@ pub fn Observable(comptime T: type) type {
         fn unregisterCallback(instrument_ptr: *anyopaque, callback_id: u64) void {
             const self: *Self = @ptrCast(@alignCast(instrument_ptr));
 
-            self.mutex.lock();
+            while (!self.mutex.tryLock()) {}
             defer self.mutex.unlock();
 
             for (self.callbacks.items, 0..) |entry, i| {
@@ -263,7 +263,7 @@ pub fn Observable(comptime T: type) type {
 
             // lock for iteration over the callbacks.
             {
-                self.mutex.lock();
+                while (!self.mutex.tryLock()) {}
                 defer self.mutex.unlock();
 
                 for (self.callbacks.items) |*entry| {

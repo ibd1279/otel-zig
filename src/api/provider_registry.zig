@@ -19,10 +19,10 @@ var global_logger_provider: std.atomic.Value(?*logs.LoggerProvider) = std.atomic
 var global_tracer_provider: std.atomic.Value(?*trace.TracerProvider) = std.atomic.Value(?*trace.TracerProvider).init(null);
 var global_meter_provider: std.atomic.Value(?*metrics.MeterProvider) = std.atomic.Value(?*metrics.MeterProvider).init(null);
 var global_config_provider: std.atomic.Value(?*config.ConfigProvider) = std.atomic.Value(?*config.ConfigProvider).init(null);
-var logger_mutex = std.Thread.Mutex{};
-var tracer_mutex = std.Thread.Mutex{};
-var meter_mutex = std.Thread.Mutex{};
-var config_mutex = std.Thread.Mutex{};
+var logger_mutex: std.atomic.Mutex = .unlocked;
+var tracer_mutex: std.atomic.Mutex = .unlocked;
+var meter_mutex: std.atomic.Mutex = .unlocked;
+var config_mutex: std.atomic.Mutex = .unlocked;
 
 /// Get the global logger provider. Fatal if a provider is not setup.
 pub fn getGlobalLoggerProvider() *const logs.LoggerProvider {
@@ -34,7 +34,7 @@ pub fn getGlobalLoggerProvider() *const logs.LoggerProvider {
 /// Uses page allocator to manage the interface wrapper memory.
 /// Returns error if allocation fails.
 pub fn setGlobalLoggerProvider(provider: ?logs.LoggerProvider) !void {
-    logger_mutex.lock();
+    while (!logger_mutex.tryLock()) {}
     defer logger_mutex.unlock();
 
     // Get old value atomically
@@ -68,7 +68,7 @@ pub fn getGlobalTracerProvider() *const trace.TracerProvider {
 /// Uses page allocator to manage the interface wrapper memory.
 /// Returns error if allocation fails.
 pub fn setGlobalTracerProvider(provider: ?trace.TracerProvider) !void {
-    tracer_mutex.lock();
+    while (!tracer_mutex.tryLock()) {}
     defer tracer_mutex.unlock();
 
     // Get old value atomically
@@ -102,7 +102,7 @@ pub fn getGlobalMeterProvider() *const metrics.MeterProvider {
 ///
 /// Callers responsiblitiy to manage the lifecycle of the returned, old provider.
 pub fn setGlobalMeterProvider(provider: ?metrics.MeterProvider) !void {
-    meter_mutex.lock();
+    while (!meter_mutex.tryLock()) {}
     defer meter_mutex.unlock();
 
     // Get old value atomically
@@ -136,7 +136,7 @@ pub fn getGlobalConfigProvider() *const config.ConfigProvider {
 /// Uses page allocator to manage the interface wrapper memory.
 /// Returns error if allocation fails.
 pub fn setGlobalConfigProvider(provider: ?config.ConfigProvider) !void {
-    config_mutex.lock();
+    while (!config_mutex.tryLock()) {}
     defer config_mutex.unlock();
 
     // Get old value atomically

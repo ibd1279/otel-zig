@@ -27,6 +27,7 @@ pub fn main(init: std.process.Init) !void {
         init,
         .{otel_sdk.logs.SimpleLogRecordProcessor.PipelineStep.init({})
             .flowTo(otel_exporters.otlp.OtlpLogExporter.PipelineStep.init(.{ .io = io }))},
+        null,
     );
     defer {
         provider.deinit();

@@ -24,7 +24,7 @@ pub const PipelineStep = sdk.common.PipelineStepInstructions(
 allocator: std.mem.Allocator,
 config: exporters.stream.SinkConfig,
 is_shutdown: std.atomic.Value(bool),
-mutex: std.Thread.Mutex,
+mutex: std.atomic.Mutex,
 
 pub fn _init(self: *LogRecordSink, config: exporters.stream.SinkConfig, allocator: std.mem.Allocator) !void {
     self.* = init(allocator, config);
@@ -35,7 +35,7 @@ pub fn init(allocator: std.mem.Allocator, config: exporters.stream.SinkConfig) L
         .allocator = allocator,
         .config = config,
         .is_shutdown = .init(false),
-        .mutex = .{},
+        .mutex = .unlocked,
     };
 }
 pub fn deinit(_: *LogRecordSink) void {}
@@ -46,7 +46,7 @@ pub fn destroy(self: *LogRecordSink) void {
 pub fn exportRecords(self: *LogRecordSink, records: []const sdk.logs.LogRecord, resource: sdk.resource.Resource) api.common.ExportResult {
     if (self.is_shutdown.load(.monotonic)) return .success;
 
-    self.mutex.lock();
+    while (!self.mutex.tryLock()) {}
     defer self.mutex.unlock();
 
     var result = api.common.ExportResult.success;
@@ -76,7 +76,7 @@ pub fn exportRecords(self: *LogRecordSink, records: []const sdk.logs.LogRecord, 
 pub fn forceFlush(self: *LogRecordSink, timeout_ms: ?u64) api.common.ExportResult {
     _ = timeout_ms;
 
-    self.mutex.lock();
+    while (!self.mutex.tryLock()) {}
     defer self.mutex.unlock();
 
     self.config.writer.flush() catch return .failure;

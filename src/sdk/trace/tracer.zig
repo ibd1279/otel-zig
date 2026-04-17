@@ -59,7 +59,7 @@ pub const StandardTracer = struct {
         }
 
         // Get timestamp
-        const default_ts = std.Io.Clock.real.now(self.provider.io) catch std.Io.Timestamp.zero;
+        const default_ts = std.Io.Clock.real.now(self.provider.io);
         const start_time = opts.start_time orelse default_ts;
 
         // Extract parent context if present

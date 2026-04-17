@@ -88,7 +88,7 @@ pub const SpanProcessor = union(enum) {
 pub const SimpleSpanProcessor = struct {
     allocator: std.mem.Allocator,
     exporter: SpanExporter,
-    mutex: std.Thread.Mutex,
+    mutex: std.atomic.Mutex,
     is_shutdown: bool,
 
     pub fn init(allocator: std.mem.Allocator, exporter: SpanExporter) !*SimpleSpanProcessor {
@@ -96,7 +96,7 @@ pub const SimpleSpanProcessor = struct {
         self.* = .{
             .allocator = allocator,
             .exporter = exporter,
-            .mutex = .{},
+            .mutex = .unlocked,
             .is_shutdown = false,
         };
         return self;
@@ -116,7 +116,7 @@ pub const SimpleSpanProcessor = struct {
     }
 
     pub inline fn onEnd(self: *SimpleSpanProcessor, span: sdk.trace.SpanData, resource: sdk.Resource) void {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (self.is_shutdown) {
@@ -129,7 +129,7 @@ pub const SimpleSpanProcessor = struct {
     }
 
     pub inline fn forceFlush(self: *SimpleSpanProcessor, timeout_ms: ?u64) otel_api.common.FlushResult {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (self.is_shutdown) {
@@ -142,7 +142,7 @@ pub const SimpleSpanProcessor = struct {
     }
 
     pub fn shutdown(self: *SimpleSpanProcessor, timeout_ms: ?u64) ProcessResult {
-        self.mutex.lock();
+        while (!self.mutex.tryLock()) {}
         defer self.mutex.unlock();
 
         if (self.is_shutdown) {

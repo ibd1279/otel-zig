@@ -40,6 +40,7 @@ test "BatchLogRecordProcessor basic functionality" {
 
     // Create batch processor (heap-allocated, provider takes ownership)
     const processor = try BatchLogRecordProcessor.init(
+        std.testing.io,
         allocator,
         mock_exporter.logRecordExporter(),
         100, // short export_interval_ms for test

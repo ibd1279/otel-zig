@@ -44,7 +44,7 @@ pub const ManualReader = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
     exporter: ?sdk.MetricExporter,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     is_shutdown: bool,
     registered_meters: std.ArrayListUnmanaged(*sdk.Meter),
     reader_state: sdk.ReaderAggregationState,
@@ -55,9 +55,9 @@ pub const ManualReader = struct {
             .allocator = allocator,
             .io = io,
             .exporter = exporter,
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
             .is_shutdown = false,
-            .registered_meters = .{},
+            .registered_meters = .empty,
             .reader_state = try sdk.ReaderAggregationState.init(
                 allocator,
                 .delta, // Default to Delta temporality for now
@@ -102,8 +102,8 @@ pub const ManualReader = struct {
         defer arena.deinit();
         const allocator = arena.allocator();
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // trigger the observables to write their data to the aggregation state.
         for (self.registered_meters.items) |meter| {
@@ -125,8 +125,8 @@ pub const ManualReader = struct {
     }
 
     pub fn forceFlush(self: *ManualReader, timeout_ms: ?u64) api.common.FlushResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.is_shutdown) {
             return .failure;
@@ -138,8 +138,8 @@ pub const ManualReader = struct {
     }
 
     pub fn shutdown(self: *ManualReader, timeout_ms: ?u64) api.common.ProcessResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.is_shutdown) {
             return .success;
@@ -153,8 +153,8 @@ pub const ManualReader = struct {
     }
 
     pub fn registerMeter(self: *ManualReader, meter: *sdk.Meter) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.is_shutdown) return;
 
@@ -165,8 +165,8 @@ pub const ManualReader = struct {
     }
 
     pub fn unregisterMeter(self: *ManualReader, meter: *sdk.Meter) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         if (self.is_shutdown) return;
 
@@ -179,8 +179,8 @@ pub const ManualReader = struct {
     }
 
     pub fn unregisterAllMeters(self: *ManualReader) void {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         self.registered_meters.clearAndFree(self.allocator);
     }

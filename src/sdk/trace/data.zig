@@ -220,7 +220,7 @@ pub const RecordingSpan = struct {
         // TODO: this should deep copy the event for memeory safety.
         var e = event;
         if (e.timestamp == null) {
-            e.timestamp = std.Io.Clock.real.now(self.tracer.provider.io) catch std.Io.Timestamp.zero;
+            e.timestamp = std.Io.Clock.real.now(self.tracer.provider.io);
         }
         self.events.append(self.tracer.provider.allocator, e) catch {};
     }
@@ -236,7 +236,7 @@ pub const RecordingSpan = struct {
     }
 
     pub fn end(self: *RecordingSpan, bridge: api.trace.Span.Bridge, options: ?api.trace.Span.EndOptions) void {
-        const default_ts = std.Io.Clock.real.now(self.tracer.provider.io) catch std.Io.Timestamp.zero;
+        const default_ts = std.Io.Clock.real.now(self.tracer.provider.io);
         const end_ts = if (options) |opts| opts.end_time orelse default_ts else default_ts;
 
         // Notify processor if available
@@ -275,7 +275,7 @@ pub const RecordingSpan = struct {
         const exception_attrs: ?[]api.AttributeKeyValue = attrs_builder.build() catch null;
         if (exception_attrs) |attrs| self.tracer.provider.allocator.free(attrs);
 
-        const default_ts = std.Io.Clock.real.now(self.tracer.provider.io) catch std.Io.Timestamp.zero;
+        const default_ts = std.Io.Clock.real.now(self.tracer.provider.io);
         self.addEvent(.{
             .name = "exception",
             .timestamp = timestamp orelse default_ts,

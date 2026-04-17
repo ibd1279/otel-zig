@@ -23,7 +23,7 @@ pub const PipelineStep = sdk.common.PipelineStepInstructions(
 allocator: std.mem.Allocator,
 config: exporters.stream.SinkConfig,
 is_shutdown: std.atomic.Value(bool),
-mutex: std.Thread.Mutex,
+mutex: std.atomic.Mutex,
 
 pub fn _init(self: *SpanDataSink, config: exporters.stream.SinkConfig, allocator: std.mem.Allocator) !void {
     self.* = init(allocator, config);
@@ -34,7 +34,7 @@ pub fn init(allocator: std.mem.Allocator, config: exporters.stream.SinkConfig) S
         .allocator = allocator,
         .config = config,
         .is_shutdown = .init(false),
-        .mutex = .{},
+        .mutex = .unlocked,
     };
 }
 pub fn deinit(_: *SpanDataSink) void {}
@@ -49,7 +49,7 @@ pub fn exportSpans(
 ) api.common.ExportResult {
     if (self.is_shutdown.load(.monotonic)) return .success;
 
-    self.mutex.lock();
+    while (!self.mutex.tryLock()) {}
     defer self.mutex.unlock();
 
     var result = api.common.ExportResult.success;
@@ -74,7 +74,7 @@ pub fn exportSpans(
 pub fn forceFlush(self: *SpanDataSink, timeout_ms: ?u64) api.common.ExportResult {
     _ = timeout_ms;
 
-    self.mutex.lock();
+    while (!self.mutex.tryLock()) {}
     defer self.mutex.unlock();
 
     self.config.writer.flush() catch return .failure;

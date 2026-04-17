@@ -31,3 +31,9 @@ Thumbs.db
 # Coverage reports
 *.gcov
 *.profdata
+
+# Local package cache (zig 0.16 project-local deps)
+zig-pkg/
+
+# Claude Code project files
+.claude/

@@ -81,9 +81,7 @@ pub fn instrumentationScopeToProto(allocator: std.mem.Allocator, scope: api.Inst
 
 test "Protobuf attribute conversion" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = testing.allocator;
 
     // Test string attribute
     {

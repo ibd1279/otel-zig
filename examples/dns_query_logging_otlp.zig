@@ -52,7 +52,7 @@ pub fn main(init: std.process.Init) !void {
     const provider = try otel_sdk.logs.setupGlobalProvider(init, .{
         otel_sdk.logs.SimpleLogRecordProcessor.PipelineStep.init({})
             .flowTo(otel_exporters.otlp.OtlpLogExporter.PipelineStep.init(exporter_config)),
-    });
+    }, null);
     defer {
         provider.deinit();
         provider.destroy();
@@ -79,7 +79,7 @@ pub fn main(init: std.process.Init) !void {
         .info, // severity
         .{ .string = "DNS Query OTLP Example application starting" }, // body
         startup_attrs, // attributes
-        try std.Io.Clock.real.now(io), // timestamp
+        std.Io.Clock.real.now(io), // timestamp
         null, // observed_timestamp
         null, // event_name
         null, // severity_text
@@ -101,7 +101,7 @@ pub fn main(init: std.process.Init) !void {
         .info, // severity
         .{ .string = "OTLP exporter configured - ensure collector is running on localhost:4318" }, // body
         connectivity_attrs, // attributes
-        try std.Io.Clock.real.now(io), // timestamp
+        std.Io.Clock.real.now(io), // timestamp
         null, // observed_timestamp
         null, // event_name
         null, // severity_text
@@ -125,7 +125,7 @@ pub fn main(init: std.process.Init) !void {
         .info, // severity
         .{ .string = "DNS Query OTLP Example application shutting down" }, // body
         shutdown_attrs, // attributes
-        try std.Io.Clock.real.now(io), // timestamp
+        std.Io.Clock.real.now(io), // timestamp
         null, // observed_timestamp
         null, // event_name
         null, // severity_text
@@ -158,7 +158,7 @@ fn performDnsQuery(ctx: []const otel_api.ContextKeyValue, allocator: std.mem.All
         .info, // severity
         .{ .string = "Initiating DNS query for hostname: google.com via OTLP" }, // body
         null, // attributes
-        try std.Io.Clock.real.now(io), // timestamp
+        std.Io.Clock.real.now(io), // timestamp
         null, // observed_timestamp
         null, // event_name
         null, // severity_text
@@ -168,7 +168,7 @@ fn performDnsQuery(ctx: []const otel_api.ContextKeyValue, allocator: std.mem.All
     );
 
     // Log detailed operation start
-    const start_time = try std.Io.Clock.real.now(io);
+    const start_time = std.Io.Clock.real.now(io);
     const dns_start_attrs = try otel_api.common.AttributeBuilder.init(allocator)
         .add(.{ .key = "dns.hostname", .value = .{ .string = hostname } })
         .add(.{ .key = "dns.query_type", .value = .{ .string = "A" } })
@@ -202,7 +202,7 @@ fn performDnsQuery(ctx: []const otel_api.ContextKeyValue, allocator: std.mem.All
         .canonical_name_buffer = &canonical_name_buffer,
     }) catch |err| {
         // Log comprehensive DNS query failure information
-        const err_time = try std.Io.Clock.real.now(io);
+        const err_time = std.Io.Clock.real.now(io);
         const duration_ns = @as(i64, @intCast(start_time.durationTo(err_time).nanoseconds));
         const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
 
@@ -269,7 +269,7 @@ fn performDnsQuery(ctx: []const otel_api.ContextKeyValue, allocator: std.mem.All
         }
     }
 
-    const end_time = try std.Io.Clock.real.now(io);
+    const end_time = std.Io.Clock.real.now(io);
     const duration_ns = @as(i64, @intCast(start_time.durationTo(end_time).nanoseconds));
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
 
@@ -317,7 +317,7 @@ fn performDnsQuery(ctx: []const otel_api.ContextKeyValue, allocator: std.mem.All
             .debug, // severity
             .{ .string = "Resolved IP address" }, // body
             ip_attrs, // attributes
-            try std.Io.Clock.real.now(io), // timestamp
+            std.Io.Clock.real.now(io), // timestamp
             null, // observed_timestamp
             null, // event_name
             null, // severity_text
@@ -340,7 +340,7 @@ fn performDnsQuery(ctx: []const otel_api.ContextKeyValue, allocator: std.mem.All
         .info, // severity
         .{ .string = "DNS resolution summary: google.com resolved to multiple addresses" }, // body
         summary_attrs, // attributes
-        try std.Io.Clock.real.now(io), // timestamp
+        std.Io.Clock.real.now(io), // timestamp
         null, // observed_timestamp
         null, // event_name
         null, // severity_text

@@ -30,7 +30,7 @@ pub const OtlpLogExporter = struct {
     config: OtlpExporterConfig,
     allocator: std.mem.Allocator,
     is_shutdown: bool,
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
 
     pub fn _init(self: *OtlpLogExporter, config: OtlpExporterConfig, allocator: std.mem.Allocator) !void {
         self.* = init(allocator, config);
@@ -41,7 +41,7 @@ pub const OtlpLogExporter = struct {
             .config = config,
             .allocator = allocator,
             .is_shutdown = false,
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
         };
     }
 
@@ -54,8 +54,8 @@ pub const OtlpLogExporter = struct {
     }
 
     pub fn exportRecords(self: *OtlpLogExporter, records: []const LogRecord, resource: Resource) ExportResult {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.config.io);
+        defer self.mutex.unlock(self.config.io);
 
         if (self.is_shutdown) {
             return .failure;
@@ -100,8 +100,8 @@ pub const OtlpLogExporter = struct {
 
     pub fn forceFlush(self: *OtlpLogExporter, timeout_ms: ?u64) ExportResult {
         _ = timeout_ms;
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.config.io);
+        defer self.mutex.unlock(self.config.io);
 
         // No-op for OTLP exporter
         return .success;
@@ -109,8 +109,8 @@ pub const OtlpLogExporter = struct {
 
     pub fn shutdown(self: *OtlpLogExporter, timeout_ms: ?u64) ExportResult {
         _ = timeout_ms;
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.config.io);
+        defer self.mutex.unlock(self.config.io);
 
         if (self.is_shutdown) {
             return .failure;
@@ -319,9 +319,7 @@ test "OtlpLogExporter basic functionality" {
 
 test "OtlpLogExporter transport selection" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = testing.allocator;
 
     // Create test resource
     const resource = try Resource.initOwned(allocator, .default);
@@ -415,9 +413,7 @@ test "OtlpLogExporter severity mapping" {
 
 test "OtlpLogExporter protobuf format validation" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = testing.allocator;
 
     // Create test resource
     const resource = try Resource.initOwned(allocator, .default);

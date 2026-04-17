@@ -26,7 +26,7 @@ pub const LoggerProvider = struct {
     resource: sdk.Resource,
     cache: std.HashMapUnmanaged(api.InstrumentationScope, *sdk.logs.Logger, sdk.common.InstrumentationScopeMapContext, 80),
     processors: std.ArrayListUnmanaged(sdk.logs.LogRecordProcessor),
-    mutex: std.Thread.Mutex,
+    mutex: std.Io.Mutex,
     is_shutdown: std.atomic.Value(bool),
     default_min_severity: api.logs.Severity,
 
@@ -41,7 +41,7 @@ pub const LoggerProvider = struct {
             .resource = resource,
             .cache = .empty,
             .processors = .empty,
-            .mutex = .{},
+            .mutex = std.Io.Mutex.init,
             .is_shutdown = .init(false),
             .default_min_severity = if (@import("builtin").mode == .Debug) .debug else .warn,
         };
@@ -51,8 +51,8 @@ pub const LoggerProvider = struct {
         // make sure we have flushed before we fully clean up.
         _ = self.shutdown(null);
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // Iterate over all the loggers to clean them up.
         var iter = self.cache.iterator();
@@ -88,8 +88,8 @@ pub const LoggerProvider = struct {
         // The mutex block is distinct because the mutex must be released before
         // forceFlush can be called.
         {
-            self.mutex.lock();
-            defer self.mutex.unlock();
+            self.mutex.lockUncancelable(self.io);
+            defer self.mutex.unlock(self.io);
 
             // flag each logger as shutdown to stop collection.
             var iter = self.cache.iterator();
@@ -110,8 +110,8 @@ pub const LoggerProvider = struct {
 
         const timeout = sdk.common.Timeout.init(timeout_ms);
 
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
         for (self.processors.items) |*processor| {
             const flush_result = processor.forceFlush(timeout.remaining() catch return .timeout);
             switch (flush_result) {
@@ -124,8 +124,8 @@ pub const LoggerProvider = struct {
 
     /// Interface definde method to get a logger.
     pub fn getLoggerWithScope(self: *LoggerProvider, scope: api.InstrumentationScope) !api.logs.Logger {
-        self.mutex.lock();
-        defer self.mutex.unlock();
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
 
         // Check cache first
         if (self.cache.get(scope)) |logger| {

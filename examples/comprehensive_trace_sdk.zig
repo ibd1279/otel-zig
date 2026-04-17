@@ -41,6 +41,7 @@ pub fn main(init: std.process.Init) !void {
             .flush_after_each = true,
             .include_attributes = true,
         }))},
+        null,
     );
     defer {
         concrete_provider.deinit();
@@ -57,7 +58,7 @@ pub fn main(init: std.process.Init) !void {
     try runErrorHandlingScenario(&trace_setup);
     try runMessageQueueScenario(io, &trace_setup);
     try runConcurrentOperationsScenario(io, allocator, &trace_setup);
-    try runPerformanceTestScenario(&trace_setup);
+    try runPerformanceTestScenario(io, &trace_setup);
 
     print("\n✅ All trace scenarios completed successfully!\n", .{});
     print("Check the console output above for OTLP JSON traces.\n", .{});
@@ -380,7 +381,7 @@ fn runConcurrentOperationsScenario(io: std.Io, allocator: std.mem.Allocator, set
     print("✅ Concurrent operations scenario completed\n", .{});
 }
 
-fn runPerformanceTestScenario(setup: *TraceSetup) !void {
+fn runPerformanceTestScenario(io: std.Io, setup: *TraceSetup) !void {
     print("\n⚡ Performance Test Scenario\n", .{});
     print("-" ** 30 ++ "\n", .{});
 
@@ -397,7 +398,7 @@ fn runPerformanceTestScenario(setup: *TraceSetup) !void {
     var perf_span = perf_result;
     defer perf_span.deinit();
 
-    const start_instant = try std.time.Instant.now();
+    const start_ts = std.Io.Clock.real.now(io);
 
     // Create many short-lived spans to test overhead
     var i: i32 = 0;
@@ -420,8 +421,8 @@ fn runPerformanceTestScenario(setup: *TraceSetup) !void {
         fast_span.end(null);
     }
 
-    const end_instant = try std.time.Instant.now();
-    const duration_ns: i64 = @intCast(end_instant.since(start_instant));
+    const end_ts = std.Io.Clock.real.now(io);
+    const duration_ns: i64 = @intCast(end_ts.nanoseconds - start_ts.nanoseconds);
     const duration_ms = @as(f64, @floatFromInt(duration_ns)) / 1_000_000.0;
 
     perf_span.setAttribute(.{ .key = "test.duration_ms", .value = .{ .float = duration_ms } });
