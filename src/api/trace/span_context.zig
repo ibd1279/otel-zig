@@ -328,9 +328,9 @@ test "Context format" {
     var buf: [512]u8 = undefined;
     const formatted = try std.fmt.bufPrint(&buf, "{f}", .{ctx});
 
-    try std.testing.expect(std.mem.indexOf(u8, formatted, "0123456789abcdef0123456789abcdef") != null);
-    try std.testing.expect(std.mem.indexOf(u8, formatted, "0123456789abcdef") != null);
-    try std.testing.expect(std.mem.indexOf(u8, formatted, "sampled=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, formatted, "remote=true") != null);
-    try std.testing.expect(std.mem.indexOf(u8, formatted, "vendor=value") != null);
+    try std.testing.expect(std.mem.find(u8, formatted, "0123456789abcdef0123456789abcdef") != null);
+    try std.testing.expect(std.mem.find(u8, formatted, "0123456789abcdef") != null);
+    try std.testing.expect(std.mem.find(u8, formatted, "sampled=true") != null);
+    try std.testing.expect(std.mem.find(u8, formatted, "remote=true") != null);
+    try std.testing.expect(std.mem.find(u8, formatted, "vendor=value") != null);
 }

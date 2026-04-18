@@ -206,7 +206,7 @@ pub const EnvironmentDetector = struct {
             var iter = std.mem.tokenizeScalar(u8, env_attrs, ',');
             while (iter.next()) |pair| {
                 const trimmed = std.mem.trim(u8, pair, " ");
-                if (std.mem.indexOf(u8, trimmed, "=")) |eq_pos| {
+                if (std.mem.find(u8, trimmed, "=")) |eq_pos| {
                     const key = trimmed[0..eq_pos];
                     const value = trimmed[eq_pos + 1 ..];
                     attrs = attrs.add(.{ .key = key, .value = .{ .string = value } });

@@ -787,9 +787,9 @@ test "enhanced error reporting with source errors" {
     defer allocator.free(detailed_msg);
 
     // Should include both the message and the source error
-    try testing.expect(std.mem.indexOf(u8, detailed_msg, "Network request failed") != null);
-    try testing.expect(std.mem.indexOf(u8, detailed_msg, "ConnectionRefused") != null);
-    try testing.expect(std.mem.indexOf(u8, detailed_msg, "http://localhost:4318") != null);
+    try testing.expect(std.mem.find(u8, detailed_msg, "Network request failed") != null);
+    try testing.expect(std.mem.find(u8, detailed_msg, "ConnectionRefused") != null);
+    try testing.expect(std.mem.find(u8, detailed_msg, "http://localhost:4318") != null);
 
     // Test formatDetailedMessage without source error
     const test_info_no_source = ErrorInfo{
@@ -804,8 +804,8 @@ test "enhanced error reporting with source errors" {
     const simple_msg = try formatDetailedMessage(allocator, test_info_no_source);
     defer allocator.free(simple_msg);
 
-    try testing.expect(std.mem.indexOf(u8, simple_msg, "Validation failed") != null);
-    try testing.expect(std.mem.indexOf(u8, simple_msg, "span_name") != null);
+    try testing.expect(std.mem.find(u8, simple_msg, "Validation failed") != null);
+    try testing.expect(std.mem.find(u8, simple_msg, "span_name") != null);
 
     // Test convenience functions with source errors
     const TestData = struct {

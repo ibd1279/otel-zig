@@ -77,7 +77,7 @@ fn heavyThreadSafeCallback(result: *ObservableResult(i64), state: *ThreadSafeSta
     state.recordOperation(@intCast(thread_id));
 
     // Simulate some work
-    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
+    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
 
     for (0..3) |i| {
         const value = state.incrementCounter();
@@ -94,8 +94,8 @@ fn heavyThreadSafeCallback(result: *ObservableResult(i64), state: *ThreadSafeSta
 }
 
 test "concurrent callback registration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa: std.heap.DebugAllocator(.{}) = .{};
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
     var counter = SdkObservableCounter(i64).init(
@@ -122,7 +122,7 @@ test "concurrent callback registration" {
                 args.handles_start[i] = args.counter_ptr.registerCallback(callback);
 
                 // Small delay to increase chance of race conditions
-                std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
+                std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
             }
         }
     };
@@ -166,8 +166,8 @@ test "concurrent callback registration" {
 }
 
 test "concurrent collection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa: std.heap.DebugAllocator(.{}) = .{};
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
     var gauge = SdkObservableGauge(i64).init(
@@ -221,7 +221,7 @@ test "concurrent collection" {
                 args.results_ptr[i] = metrics.len > 0;
 
                 // Small delay to increase thread interleaving
-                std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
+                std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
             }
         }
     };
@@ -263,8 +263,8 @@ test "concurrent collection" {
 }
 
 test "race conditions during registration and collection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa: std.heap.DebugAllocator(.{}) = .{};
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
     var counter = SdkObservableCounter(i64).init(
@@ -296,9 +296,9 @@ test "race conditions during registration and collection" {
                     const callback = createTypeErasedCallback(i64, ThreadSafeState, threadSafeCallback, args.state_ptr);
                     const handle = args.counter_ptr.registerCallback(callback);
 
-                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
+                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
                     handle.unregister();
-                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
+                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
                 }
             } else if (thread_id < 4) {
                 // Collection threads
@@ -306,7 +306,7 @@ test "race conditions during registration and collection" {
                     const metrics = args.counter_ptr.collect(args.allocator_ptr) catch continue;
                     defer args.allocator_ptr.free(metrics);
 
-                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
+                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
                 }
             } else {
                 // Mixed operation threads
@@ -316,7 +316,7 @@ test "race conditions during registration and collection" {
                         const handle = args.counter_ptr.registerCallback(callback);
                         defer handle.unregister();
 
-                        std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
+                        std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
                     } else {
                         const metrics = args.counter_ptr.collect(args.allocator_ptr) catch continue;
                         defer args.allocator_ptr.free(metrics);
@@ -354,8 +354,8 @@ test "race conditions during registration and collection" {
 }
 
 test "thread safety of callback metrics" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa: std.heap.DebugAllocator(.{}) = .{};
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
     var gauge = SdkObservableGauge(i64).init(
@@ -395,7 +395,7 @@ test "thread safety of callback metrics" {
                 const all_callback_metrics = args.gauge_ptr.getAllCallbackMetrics(args.allocator_ptr) catch continue;
                 defer args.allocator_ptr.free(all_callback_metrics);
 
-                std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
+                std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
             }
         }
     };
@@ -421,8 +421,8 @@ test "thread safety of callback metrics" {
 }
 
 test "stress test with many concurrent operations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    var gpa: std.heap.DebugAllocator(.{}) = .{};
+    defer std.debug.assert(gpa.deinit() == .ok);
     const allocator = gpa.allocator();
 
     var counter = SdkObservableCounter(i64).init(
@@ -502,7 +502,7 @@ test "stress test with many concurrent operations" {
 
                 // Small delay to increase concurrency
                 if (op % 5 == 0) {
-                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(\1), .awake) catch {};
+                    std.Io.sleep(std.testing.io, std.Io.Duration.fromMilliseconds(1), .awake) catch {};
                 }
             }
         }

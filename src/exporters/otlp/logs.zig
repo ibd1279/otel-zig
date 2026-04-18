@@ -352,9 +352,9 @@ test "OtlpLogExporter transport selection" {
 
         const json_data = try exporter.convertToJsonFormat(arena.allocator(), &[_]LogRecord{log_record}, resource);
         try testing.expect(json_data.len > 0);
-        try testing.expect(std.mem.indexOf(u8, json_data, "test message") != null);
-        try testing.expect(std.mem.indexOf(u8, json_data, "test.key") != null);
-        try testing.expect(std.mem.indexOf(u8, json_data, "telemetry.sdk.name") != null);
+        try testing.expect(std.mem.find(u8, json_data, "test message") != null);
+        try testing.expect(std.mem.find(u8, json_data, "test.key") != null);
+        try testing.expect(std.mem.find(u8, json_data, "telemetry.sdk.name") != null);
     }
 
     // Test protobuf transport
@@ -449,12 +449,12 @@ test "OtlpLogExporter protobuf format validation" {
     try testing.expect(protobuf_data.len < protobuf_json.len);
 
     // JSON should contain the test message and attributes
-    try testing.expect(std.mem.indexOf(u8, protobuf_json, "test message") != null);
-    try testing.expect(std.mem.indexOf(u8, protobuf_json, "test.key") != null);
-    try testing.expect(std.mem.indexOf(u8, protobuf_json, "test.value") != null);
+    try testing.expect(std.mem.find(u8, protobuf_json, "test message") != null);
+    try testing.expect(std.mem.find(u8, protobuf_json, "test.key") != null);
+    try testing.expect(std.mem.find(u8, protobuf_json, "test.value") != null);
 
     // JSON should contain OTLP structure
-    try testing.expect(std.mem.indexOf(u8, protobuf_json, "resourceLogs") != null);
-    try testing.expect(std.mem.indexOf(u8, protobuf_json, "scopeLogs") != null);
-    try testing.expect(std.mem.indexOf(u8, protobuf_json, "logRecords") != null);
+    try testing.expect(std.mem.find(u8, protobuf_json, "resourceLogs") != null);
+    try testing.expect(std.mem.find(u8, protobuf_json, "scopeLogs") != null);
+    try testing.expect(std.mem.find(u8, protobuf_json, "logRecords") != null);
 }

@@ -63,7 +63,7 @@ pub const StateKeyValue = struct {
         var iter = std.mem.splitScalar(u8, source, ',');
         while (iter.next()) |slice| {
             // Find the equals sign
-            if (std.mem.indexOf(u8, slice, "=")) |eq_pos| {
+            if (std.mem.find(u8, slice, "=")) |eq_pos| {
                 const entry = StateKeyValue{
                     .key = std.mem.trim(u8, slice[0..eq_pos], " \t"),
                     .value = std.mem.trim(u8, slice[eq_pos + 1 ..], " \t"),
@@ -157,7 +157,7 @@ pub const StateKeyValue = struct {
     // multi-tenant-key = tenant-id "@" system-id
     fn validateKey(key: []const u8) bool {
         // Check for multi-tenant key (contains @)
-        if (std.mem.indexOf(u8, key, "@")) |at_pos| {
+        if (std.mem.find(u8, key, "@")) |at_pos| {
             return validateMultiTenantKey(key, at_pos);
         } else {
             return validateSimpleKey(key, MAX_KEY_LENGTH, false);
@@ -324,7 +324,7 @@ pub const OtState = struct {
         var result = OtState{};
         var iter = std.mem.splitScalar(u8, source, ';');
         while (iter.next()) |slice| {
-            if (std.mem.indexOf(u8, slice, ":")) |eq_pos| {
+            if (std.mem.find(u8, slice, ":")) |eq_pos| {
                 const key = slice[0..eq_pos];
                 const value = slice[eq_pos + 1 ..];
                 if (std.mem.eql(u8, "th", key) and value.len <= 14) {

@@ -148,9 +148,6 @@ pub const ReaderAggregationState = struct {
         const data_points = try allocator.alloc(sdk.MetricDataPoint, 1);
         errdefer allocator.free(data_points);
 
-        // Clone attributes from the entry for export
-        // const export_attributes = try allocator.alloc(api.AttributeKeyValue, entry.attributes.len);
-        // @memcpy(export_attributes, entry.attributes);
         const export_attributes = entry.attributes;
 
         switch (entry.aggregation) {
@@ -191,15 +188,13 @@ pub const ReaderAggregationState = struct {
             .last_value_i64 => |*lv| {
                 const value = lv.getValue();
                 if (value == null) {
-                    // No value recorded, skip this gauge
                     allocator.free(data_points);
-                    allocator.free(export_attributes);
                     return null;
                 }
 
                 data_points[0] = sdk.MetricDataPoint{
                     .timestamp = timestamp,
-                    .start_timestamp = null, // Last value doesn't have start time
+                    .start_timestamp = null,
                     .attributes = export_attributes,
                     .value = .{ .i64_gauge = value.? },
                 };
@@ -216,15 +211,13 @@ pub const ReaderAggregationState = struct {
             .last_value_f64 => |*lv| {
                 const value = lv.getValue();
                 if (value == null) {
-                    // No value recorded, skip this gauge
                     allocator.free(data_points);
-                    allocator.free(export_attributes);
                     return null;
                 }
 
                 data_points[0] = sdk.MetricDataPoint{
                     .timestamp = timestamp,
-                    .start_timestamp = null, // Last value doesn't have start time
+                    .start_timestamp = null,
                     .attributes = export_attributes,
                     .value = .{ .f64_gauge = value.? },
                 };
@@ -240,13 +233,10 @@ pub const ReaderAggregationState = struct {
             },
             .histogram_i64 => |*hist| {
                 if (hist.getCount() == 0) {
-                    // No data recorded, skip this histogram
                     allocator.free(data_points);
-                    allocator.free(export_attributes);
                     return null;
                 }
 
-                // Copy atomic bucket counts to regular u64 array
                 const bucket_counts = try allocator.alloc(u64, hist.counts.len);
                 for (hist.counts, 0..) |*atomic_count, i| {
                     bucket_counts[i] = atomic_count.load(.monotonic);
@@ -279,13 +269,10 @@ pub const ReaderAggregationState = struct {
             },
             .histogram_f64 => |*hist| {
                 if (hist.getCount() == 0) {
-                    // No data recorded, skip this histogram
                     allocator.free(data_points);
-                    allocator.free(export_attributes);
                     return null;
                 }
 
-                // Copy atomic bucket counts to regular u64 array
                 const bucket_counts = try allocator.alloc(u64, hist.counts.len);
                 for (hist.counts, 0..) |*atomic_count, i| {
                     bucket_counts[i] = atomic_count.load(.monotonic);
@@ -317,9 +304,7 @@ pub const ReaderAggregationState = struct {
                 };
             },
             .drop => {
-                // Drop aggregation produces no metric data
                 allocator.free(data_points);
-                allocator.free(export_attributes);
                 return null;
             },
         }
@@ -328,7 +313,8 @@ pub const ReaderAggregationState = struct {
 
 test "ReaderAggregationState - concurrent recordMeasurement and snapshot" {
     // page_allocator is used because testing.allocator is not thread-safe
-    // and GeneralPurposeAllocator was removed in Zig 0.16.
+    // for concurrent allocation across threads. DebugAllocator would also
+    // work but page_allocator avoids the overhead of leak tracking here.
     const allocator = std.heap.page_allocator;
 
     var state = try ReaderAggregationState.init(allocator, .delta, defaultAggregationSelector);

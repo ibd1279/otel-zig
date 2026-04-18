@@ -108,9 +108,7 @@ fn statelessCallback(result: *ObservableResult(i64)) void {
 }
 
 test "basic integration with metric collection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Create meter provider and meter with empty resource to avoid ownership issues
     var provider = BasicMeterProvider.init(allocator, Resource.empty);
@@ -153,9 +151,7 @@ test "basic integration with metric collection" {
 }
 
 test "concurrent callback execution" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig{
         .track_callback_metrics = true,
@@ -210,9 +206,7 @@ test "concurrent callback execution" {
 }
 
 test "memory management during collection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     var counter = SdkObservableCounter(i64).init(
         allocator,
@@ -247,9 +241,7 @@ test "memory management during collection" {
 }
 
 test "collection with mixed callback types" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     var gauge = SdkObservableGauge(i64).init(
         allocator,
@@ -311,9 +303,7 @@ test "collection with mixed callback types" {
 }
 
 test "callback registration and unregistration during collection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     var counter = SdkObservableCounter(i64).init(
         allocator,
@@ -370,9 +360,7 @@ test "callback registration and unregistration during collection" {
 }
 
 test "large scale collection performance" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     var gauge = SdkObservableGauge(i64).init(
         allocator,

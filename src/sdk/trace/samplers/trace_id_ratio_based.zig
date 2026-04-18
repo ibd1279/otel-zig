@@ -40,7 +40,7 @@ pub const TraceIdRatioBasedSampler = struct {
         }
         const clamped_ratio = std.math.clamp(ratio, 0.0, 1.0);
         const threshold_float = (1.0 - clamped_ratio) * @as(f64, @floatFromInt(1 << 56));
-        const threshold_toobig = @as(u64, @intFromFloat(threshold_float));
+        const threshold_toobig: u64 = @trunc(threshold_float);
         if (threshold_toobig > max_threshold) {
             // What was passed in is either 0.0 or effectively 0.0, so treat as 0.0
             const desc = std.fmt.bufPrint(&desc_buffer, desc_format, .{0.0}) catch blk: {

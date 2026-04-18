@@ -102,7 +102,8 @@ const MockSdkConfigProvider = struct {
     const config_impl = ConfigImpl{};
 };
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    _ = init;
     std.debug.print("OpenTelemetry Configuration API Example\n", .{});
     std.debug.print("=====================================\n\n", .{});
 

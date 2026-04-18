@@ -68,9 +68,7 @@ fn testCallbackF64(result: *ObservableResult(f64), state: *TestState) void {
 }
 
 test "SdkObservableCounter basic functionality" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig.default();
     var counter = SdkObservableCounter(i64).init(
@@ -105,9 +103,7 @@ test "SdkObservableCounter basic functionality" {
 }
 
 test "SdkObservableGauge basic functionality" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig.default();
     var gauge = SdkObservableGauge(f64).init(
@@ -135,9 +131,7 @@ test "SdkObservableGauge basic functionality" {
 }
 
 test "SdkObservableUpDownCounter basic functionality" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig.default();
     var updown = SdkObservableUpDownCounter(i64).init(
@@ -165,9 +159,7 @@ test "SdkObservableUpDownCounter basic functionality" {
 }
 
 test "multiple callback registration and execution" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig.default();
     var counter = SdkObservableCounter(i64).init(
@@ -207,9 +199,7 @@ test "multiple callback registration and execution" {
 }
 
 test "callback unregistration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig.default();
     var counter = SdkObservableCounter(i64).init(
@@ -246,9 +236,7 @@ test "callback unregistration" {
 }
 
 test "multiple measurements from single callback" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig.default();
     var gauge = SdkObservableGauge(i64).init(
@@ -275,9 +263,7 @@ test "multiple measurements from single callback" {
 }
 
 test "callback error handling policies" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Test fail_fast policy
     {
@@ -344,9 +330,7 @@ test "callback error handling policies" {
 }
 
 test "callback metrics tracking" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig{
         .track_callback_metrics = true,
@@ -415,9 +399,7 @@ test "async instrument configuration variants" {
 }
 
 test "callback metrics functionality" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     var metrics = CallbackMetrics{};
     defer metrics.deinit(allocator);
@@ -443,9 +425,7 @@ test "callback metrics functionality" {
 }
 
 test "empty callback collection" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig.default();
     var counter = SdkObservableCounter(i64).init(
@@ -465,9 +445,7 @@ test "empty callback collection" {
 }
 
 test "concurrent callback registration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig.default();
     var counter = SdkObservableCounter(i64).init(

@@ -62,7 +62,10 @@ pub const OtlpMetricExporter = struct {
             return .failure;
         }
 
-        var metrics_data = convertToOtlpFormat(self.allocator, metrics) catch |err| {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+
+        const metrics_data = convertToOtlpFormat(arena.allocator(), metrics) catch |err| {
             const first_metric_name = if (metrics.len > 0) metrics[0].name else "(no metrics)";
             error_handler.reportError(.{
                 .component = .exporter,
@@ -74,9 +77,8 @@ pub const OtlpMetricExporter = struct {
             });
             return .failure;
         };
-        defer metrics_data.deinit(self.allocator);
 
-        self.sendRequest(self.allocator, metrics_data) catch |err| {
+        self.sendRequest(arena.allocator(), metrics_data) catch |err| {
             error_handler.reportError(.{
                 .component = .exporter,
                 .operation = "otlp_metric_network",

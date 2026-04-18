@@ -55,9 +55,7 @@ fn simpleCallback(result: *ObservableResult(i64)) void {
 }
 
 test "observable counter API to SDK integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Create meter provider with empty resource to avoid ownership issues
     var provider = BasicMeterProvider.init(allocator, Resource.empty);
@@ -110,9 +108,7 @@ test "observable counter API to SDK integration" {
 }
 
 test "observable gauge API to SDK integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Create meter provider with empty resource to avoid ownership issues
     var provider = BasicMeterProvider.init(allocator, Resource.empty);
@@ -162,9 +158,7 @@ test "observable gauge API to SDK integration" {
 }
 
 test "observable updown counter API to SDK integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Create meter provider with empty resource to avoid ownership issues
     var provider = BasicMeterProvider.init(allocator, Resource.empty);
@@ -214,9 +208,7 @@ test "observable updown counter API to SDK integration" {
 }
 
 test "stateless callback API integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Create meter provider with empty resource to avoid ownership issues
     var provider = BasicMeterProvider.init(allocator, Resource.empty);
@@ -264,9 +256,7 @@ test "stateless callback API integration" {
 }
 
 test "multiple observable instruments on same meter" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Create meter provider with empty resource to avoid ownership issues
     var provider = BasicMeterProvider.init(allocator, Resource.empty);
@@ -329,9 +319,7 @@ test "multiple observable instruments on same meter" {
 }
 
 test "observable instruments with attributes" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Create meter provider with empty resource to avoid ownership issues
     var provider = BasicMeterProvider.init(allocator, Resource.empty);

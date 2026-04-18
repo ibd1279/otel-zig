@@ -374,9 +374,9 @@ test "ContextKey formatting" {
     try w.print("{f}", .{TestKey{}});
 
     const result = w.buffered();
-    try testing.expect(std.mem.indexOf(u8, result, "debug.test") != null);
-    try testing.expect(std.mem.indexOf(u8, result, "[]const u8") != null);
-    try testing.expect(std.mem.indexOf(u8, result, "ContextKey{") != null);
+    try testing.expect(std.mem.find(u8, result, "debug.test") != null);
+    try testing.expect(std.mem.find(u8, result, "[]const u8") != null);
+    try testing.expect(std.mem.find(u8, result, "ContextKey{") != null);
 }
 
 test "ContextValue from and as methods" {

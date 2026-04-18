@@ -105,9 +105,7 @@ fn tooManyMeasurementsCallback(result: *ObservableResult(i64), state: *TestState
 }
 
 test "callback error reporting integration" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Initialize error capture
     ErrorCapture.init(allocator);
@@ -154,7 +152,7 @@ test "callback error reporting integration" {
         const last_error = ErrorCapture.getLastError().?;
         try testing.expectEqual(Component.meter, last_error.component);
         try testing.expectEqual(ErrorType.callback, last_error.error_type);
-        try testing.expect(std.mem.indexOf(u8, last_error.message, "no measurements") != null);
+        try testing.expect(std.mem.find(u8, last_error.message, "no measurements") != null);
     }
 
     // Test 2: Too many measurements produced
@@ -174,14 +172,12 @@ test "callback error reporting integration" {
         const last_error = ErrorCapture.getLastError().?;
         try testing.expectEqual(Component.meter, last_error.component);
         try testing.expectEqual(ErrorType.callback, last_error.error_type);
-        try testing.expect(std.mem.indexOf(u8, last_error.message, "too many measurements") != null);
+        try testing.expect(std.mem.find(u8, last_error.message, "too many measurements") != null);
     }
 }
 
 test "callback error policy enforcement" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Initialize error capture
     ErrorCapture.init(allocator);
@@ -234,9 +230,7 @@ test "callback error policy enforcement" {
 }
 
 test "callback metrics tracking with error reporting" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Initialize error capture
     ErrorCapture.init(allocator);
@@ -290,9 +284,7 @@ test "callback metrics tracking with error reporting" {
 }
 
 test "error context information" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Initialize error capture
     ErrorCapture.init(allocator);
@@ -333,13 +325,11 @@ test "error context information" {
     try testing.expect(ErrorCapture.getErrorCount() > 0);
     const last_error = ErrorCapture.getLastError().?;
     try testing.expect(last_error.context != null);
-    try testing.expect(std.mem.indexOf(u8, last_error.context.?, "my.test.instrument") != null);
+    try testing.expect(std.mem.find(u8, last_error.context.?, "my.test.instrument") != null);
 }
 
 test "callback performance monitoring" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     const config = AsyncInstrumentConfig{
         .track_callback_metrics = true,
@@ -385,9 +375,7 @@ test "callback performance monitoring" {
 }
 
 test "multiple callbacks with different error behaviors" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    const allocator = std.testing.allocator;
 
     // Initialize error capture
     ErrorCapture.init(allocator);
