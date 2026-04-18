@@ -388,7 +388,7 @@ test "BatchSpanProcessor - span queuing and export" {
     );
 
     const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
-    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = .init() }, .keep);
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
     defer provider.deinit();
 
     try provider.registerProcessor(processor.spanProcessor());
@@ -446,7 +446,7 @@ test "BatchSpanProcessor - queue overflow drops newest" {
     );
 
     const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
-    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = .init() }, .keep);
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
     defer provider.deinit();
 
     try provider.registerProcessor(processor.spanProcessor());
@@ -518,7 +518,7 @@ test "BatchSpanProcessor - shutdown behavior" {
     defer otel_api.common.clearMockErrorHandler();
 
     const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
-    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = .init() }, .keep);
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
     defer provider.deinit();
 
     var processor: *BatchSpanProcessor = undefined;
@@ -581,7 +581,7 @@ test "BatchSpanProcessor - setExporter drains and frees old exporter" {
     );
 
     const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
-    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = .init() }, .keep);
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
     defer provider.deinit();
 
     try provider.registerProcessor(processor.spanProcessor());

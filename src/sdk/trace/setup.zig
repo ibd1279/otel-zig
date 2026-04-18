@@ -30,7 +30,7 @@ fn createDefaultProviderValue(allocator: std.mem.Allocator, io: std.Io, applicat
         allocator,
         io,
         detected_resource,
-        createDefaultIdGenerator(),
+        try createDefaultIdGenerator(io),
         samplers.always_on,
     );
 }

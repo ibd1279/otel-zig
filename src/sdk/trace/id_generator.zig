@@ -7,7 +7,6 @@
 //! - IDs should be randomly generated with good entropy
 
 const std = @import("std");
-const builtin = @import("builtin");
 
 /// ID generator interface for generating trace and span IDs
 pub const IdGenerator = union(enum) {
@@ -35,38 +34,12 @@ pub const IdGenerator = union(enum) {
 pub const RandomIdGenerator = struct {
     prng: std.Random.ChaCha,
 
-    pub fn init() RandomIdGenerator {
+    pub fn init(io: std.Io) !RandomIdGenerator {
         var seed: [32]u8 = undefined;
-        fillRandomBytes(&seed);
+        try io.randomSecure(&seed);
         return .{
             .prng = std.Random.ChaCha.init(seed),
         };
-    }
-
-    fn fillRandomBytes(buf: []u8) void {
-        const os = @import("builtin").os.tag;
-        switch (os) {
-            .macos, .ios, .tvos, .watchos, .freebsd, .netbsd, .openbsd, .dragonfly => {
-                std.c.arc4random_buf(buf.ptr, buf.len);
-            },
-            .linux => {
-                const rc = std.posix.system.getrandom(buf.ptr, buf.len, 0);
-                if (rc < 0) {
-                    // Fallback: use a time-based seed (not cryptographically secure)
-                    var ts: std.posix.system.timespec = undefined;
-                    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
-                    const t: u64 = @bitCast(ts.sec *% 1_000_000_000 +% ts.nsec);
-                    for (buf, 0..) |*b, i| b.* = @truncate(t >> @intCast((i % 8) * 8));
-                }
-            },
-            else => {
-                // Fallback: time-based seed
-                var ts: std.posix.system.timespec = undefined;
-                _ = std.posix.system.clock_gettime(.REALTIME, &ts);
-                const t: u64 = @bitCast(ts.sec *% 1_000_000_000 +% ts.nsec);
-                for (buf, 0..) |*b, i| b.* = @truncate(t >> @intCast((i % 8) * 8));
-            },
-        }
     }
 
     pub fn generateTraceId(self: *RandomIdGenerator) [16]u8 {
@@ -126,20 +99,8 @@ pub const CustomIdGenerator = struct {
 };
 
 /// Create a default random ID generator
-pub fn createDefaultIdGenerator() IdGenerator {
-    return .{ .random = RandomIdGenerator.init() };
-}
-
-/// Generate a trace ID using the default generator
-pub fn generateTraceId() [16]u8 {
-    var generator = createDefaultIdGenerator();
-    return generator.generateTraceId();
-}
-
-/// Generate a span ID using the default generator
-pub fn generateSpanId() [8]u8 {
-    var generator = createDefaultIdGenerator();
-    return generator.generateSpanId();
+pub fn createDefaultIdGenerator(io: std.Io) !IdGenerator {
+    return .{ .random = try RandomIdGenerator.init(io) };
 }
 
 /// Format a trace ID as a hex string (requires a buffer of at least 32 bytes)
@@ -174,8 +135,9 @@ pub fn parseSpanId(hex: []const u8) ![8]u8 {
 
 test "RandomIdGenerator generates valid IDs" {
     const testing = std.testing;
+    const io = std.testing.io;
 
-    var generator = RandomIdGenerator.init();
+    var generator = try RandomIdGenerator.init(io);
 
     // Generate trace IDs
     const trace_id1 = generator.generateTraceId();
@@ -274,18 +236,3 @@ test "ID formatting and parsing" {
     try testing.expectEqualSlices(u8, &span_id, &parsed_span);
 }
 
-test "convenience functions" {
-    const testing = std.testing;
-
-    const trace_id1 = generateTraceId();
-    const trace_id2 = generateTraceId();
-
-    try testing.expectEqual(@as(usize, 16), trace_id1.len);
-    try testing.expect(!std.mem.eql(u8, &trace_id1, &trace_id2));
-
-    const span_id1 = generateSpanId();
-    const span_id2 = generateSpanId();
-
-    try testing.expectEqual(@as(usize, 8), span_id1.len);
-    try testing.expect(!std.mem.eql(u8, &span_id1, &span_id2));
-}

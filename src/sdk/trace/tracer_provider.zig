@@ -193,7 +193,7 @@ test "TracerProvider basic operations" {
         allocator,
         std.testing.io,
         resource,
-        sdk.trace.createDefaultIdGenerator(),
+        try sdk.trace.createDefaultIdGenerator(std.testing.io),
         sdk.trace.samplers.always_on,
     );
     try provider_ptr.registerProcessor(processor);

@@ -54,8 +54,6 @@ pub const samplers = @import("samplers/root.zig");
 pub const IdGenerator = @import("id_generator.zig").IdGenerator;
 pub const RandomIdGenerator = @import("id_generator.zig").RandomIdGenerator;
 pub const createDefaultIdGenerator = @import("id_generator.zig").createDefaultIdGenerator;
-pub const generateTraceId = @import("id_generator.zig").generateTraceId;
-pub const generateSpanId = @import("id_generator.zig").generateSpanId;
 
 // Resource type
 const Resource = @import("../resource/resource.zig").Resource;

@@ -248,7 +248,8 @@ test "TraceIdRatioBasedSampler - deterministic behavior" {
 
 test "TraceIdRatioBasedSampler - different trace IDs" {
     const sampler = TraceIdRatioBasedSampler.init(0.5, 14);
-    var id_generator = @import("../id_generator.zig").RandomIdGenerator.init();
+    const io = std.testing.io;
+    var id_generator = try @import("../id_generator.zig").RandomIdGenerator.init(io);
 
     // Test with different trace IDs to ensure we get some variation
     var sampled_count: u32 = 0;
