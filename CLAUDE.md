@@ -10,7 +10,7 @@ The code targets zig version 0.16.0. This often means you should ask the human w
 
 - `zig build` - Build and compile all libraries (otel-api, otel-sdk, otel-exporters, otel)
 - `zig build install` - Install libraries to the standard install directory
-- `zig build test` - Run all unit tests
+- `zig build test` - Run all unit tests (only covers code reachable from test blocks in module roots — does not compile examples)
 - `zig build test-api` - Run API-only tests
 - `zig build test-sdk` - Run SDK-only tests
 - `zig build test-exporters` - Run exporter tests
@@ -37,7 +37,7 @@ zig test -Mroot=some_api_test.zig -Motel-api=src/api/root.zig
 zig test --dep "otel-api" -Mroot=some_sdk_test.zig -Motel-api=src/api/root.zig -Motel-sdk=src/sdk/root.zig
 
 # Complex example
-timeout 60s zig run --dep "otel-api" --dep "otel-sdk" --dep "otel-exporters" -Mroot=debug_hang.zig -Motel-api=src/api/root.zig --dep "otel-api" -Motel-sdk=src/sdk/root.zig --dep "otel-api" --dep "otel-sdk" --dep "protobuf" -Motel-exporters=src/exporters/root.zig -Mprotobuf=/Users/jwatson/.cache/zig/p/protobuf-2.0.0-0e82akObGwBZQtrB7Qb6CTWSrwYKRPJ0M4L0CuTJmJ9G/src/protobuf.zig
+timeout 60s zig run --dep "otel-api" --dep "otel-sdk" --dep "otel-exporters" -Mroot=debug_hang.zig -Motel-api=src/api/root.zig --dep "otel-api" -Motel-sdk=src/sdk/root.zig --dep "otel-api" --dep "otel-sdk" --dep "protobuf" -Motel-exporters=src/exporters/root.zig -Mprotobuf=../zig-protobuf/src/protobuf.zig
 ```
 
 Helpful hints:
@@ -45,7 +45,7 @@ Helpful hints:
 - otel-sdk: `--dep "otel-api"`
 - otel-exporters: `--dep "otel-api" --dep "otel-sdk"` and protobuf
 
-You can normally find the path to protobuf under the `.cache` directory.
+The protobuf dependency is a local path at `../zig-protobuf/src/protobuf.zig`.
 
 ## Architecture Overview
 
