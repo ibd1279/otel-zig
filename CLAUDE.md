@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Versions
 
-The code targets zig version 0.16.0. This often means you should ask the human what the current way to do things is. For example, std.Thread.* sync primitives moved to std.Io.* and std.atomic.*, std.Io is the I/O abstraction layer, and std.heap.GeneralPurposeAllocator was removed.
+The code targets zig version 0.16.0. This often means you should ask the human what the current way to do things is. For example, std.Thread.* sync primitives moved to std.Io.* and std.atomic.*, std.Io is the I/O abstraction layer, and std.heap.GeneralPurposeAllocator was removed — replaced by std.heap.DebugAllocator (use std.testing.allocator in tests).
 
 ## Build Commands
 

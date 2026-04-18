@@ -1,6 +1,6 @@
 # Zig Otel
 
-This is a zig implementation of the OTel API and SDK. It was built for zig 0.15.1.
+This is a zig implementation of the OTel API and SDK. It was built for zig 0.16.0.
 
 ## Build Commands
 
@@ -24,9 +24,8 @@ Providers are configured using the `setupGlobalProvider` pattern with pipeline c
 The logging system supports integration with the existing `std.log`, in addition to otel API calls. This example shows both, using the OTLP exporter.
 
 ```zig
-var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-defer _ = gpa.deinit();
-const allocator = gpa.allocator();
+pub fn main(init: std.process.Init) !void {
+    const allocator = init.gpa;
 
 // Clean up global providers at program exit
 defer otel_api.provider_registry.unsetAllProviders();
