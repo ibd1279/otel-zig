@@ -477,7 +477,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !voi
         shared_state.allocator,
         io,
         try otel_sdk.resource.Resource.initOwned(shared_state.allocator, core_resource),
-        otel_sdk.trace.createDefaultIdGenerator(),
+        try otel_sdk.trace.createDefaultIdGenerator(io),
         otel_sdk.trace.samplers.parentBased(otel_sdk.trace.samplers.traceIdRatioBased(0.5)),
     );
     defer tracer_provider.deinit();
@@ -1213,7 +1213,7 @@ fn setupCustomTraceProvider(allocator: std.mem.Allocator, io: std.Io, sampling_r
         allocator,
         io,
         final_resource,
-        createDefaultIdGenerator(),
+        try createDefaultIdGenerator(io),
         sampler,
     );
     errdefer provider_ptr.deinit();
