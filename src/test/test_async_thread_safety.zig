@@ -9,9 +9,8 @@ const otel_api = @import("otel-api");
 const otel_sdk = @import("otel-sdk");
 
 fn nanoTimestamp() i64 {
-    var ts: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
-    return @as(i64, ts.sec) * 1_000_000_000 + @as(i64, ts.nsec);
+    const ts = std.Io.Clock.real.now(std.testing.io) catch std.Io.Timestamp.zero;
+    return ts.nanoseconds;
 }
 
 const ObservableResult = otel_api.metrics.ObservableResult;

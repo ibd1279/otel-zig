@@ -9,15 +9,13 @@ const otel_api = @import("otel-api");
 const otel_sdk = @import("otel-sdk");
 
 fn nanoTimestamp() i64 {
-    var ts: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
-    return @as(i64, ts.sec) * 1_000_000_000 + @as(i64, ts.nsec);
+    const ts = std.Io.Clock.real.now(std.testing.io) catch std.Io.Timestamp.zero;
+    return ts.nanoseconds;
 }
 
 fn milliTimestamp() i64 {
-    var ts: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
-    return @as(i64, ts.sec) * 1_000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+    const ts = std.Io.Clock.real.now(std.testing.io) catch std.Io.Timestamp.zero;
+    return @divTrunc(ts.nanoseconds, std.time.ns_per_ms);
 }
 
 const ObservableResult = otel_api.metrics.ObservableResult;

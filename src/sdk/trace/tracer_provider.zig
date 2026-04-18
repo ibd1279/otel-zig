@@ -91,7 +91,7 @@ pub const TracerProvider = struct {
     pub fn shutdown(self: *TracerProvider, timeout_ms: ?u64) api.common.ProcessResult {
         if (self.is_shutdown.load(.monotonic)) return .success;
 
-        const timeout = sdk.common.Timeout.init(timeout_ms);
+        const timeout = sdk.common.Timeout.init(self.io, timeout_ms);
 
         // The mutex block is distinct because the mutex must be released before
         // forceFlush can be called.
@@ -115,7 +115,7 @@ pub const TracerProvider = struct {
     pub fn forceFlush(self: *TracerProvider, timeout_ms: ?u64) api.common.FlushResult {
         // Shutdown providers can still force flush. No shutdown check.
 
-        const timeout = sdk.common.Timeout.init(timeout_ms);
+        const timeout = sdk.common.Timeout.init(self.io, timeout_ms);
 
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);

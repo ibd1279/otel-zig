@@ -11,10 +11,9 @@
 const std = @import("std");
 const otel_api = @import("otel-api");
 
-fn milliTimestamp() i64 {
-    var ts: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
-    return @as(i64, ts.sec) * 1_000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+fn milliTimestamp(io: std.Io) i64 {
+    const ts = std.Io.Clock.real.now(io) catch std.Io.Timestamp.zero;
+    return @divTrunc(ts.nanoseconds, std.time.ns_per_ms);
 }
 const sdk = struct {
     const Resource = @import("../resource/resource.zig").Resource;

@@ -2,24 +2,25 @@ const std = @import("std");
 
 const Timeout = @This();
 
+io: std.Io,
 start: i64,
 timeout: ?u64,
 
-fn milliTimestamp() i64 {
-    var ts: std.posix.system.timespec = undefined;
-    _ = std.posix.system.clock_gettime(.REALTIME, &ts);
-    return @as(i64, ts.sec) * 1_000 + @divTrunc(@as(i64, ts.nsec), 1_000_000);
+fn milliTimestamp(io: std.Io) i64 {
+    const ts = std.Io.Clock.real.now(io);
+    return @intCast(@divTrunc(ts.nanoseconds, std.time.ns_per_ms));
 }
 
-pub inline fn init(timeout_ms: ?u64) Timeout {
+pub inline fn init(io: std.Io, timeout_ms: ?u64) Timeout {
     return .{
-        .start = milliTimestamp(),
+        .io = io,
+        .start = milliTimestamp(io),
         .timeout = timeout_ms,
     };
 }
 
 pub inline fn elapsed(self: *const Timeout) u64 {
-    return @as(u64, @intCast(milliTimestamp() - self.start));
+    return @as(u64, @intCast(milliTimestamp(self.io) - self.start));
 }
 
 pub inline fn isExpired(self: *const Timeout) bool {
