@@ -708,3 +708,137 @@ test "Advisory attributes filtering with and without views" {
         try testing.expect(found_user_id);
     }
 }
+
+test "View multi-stream: two renaming views on a Counter produce two independent streams" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const resource = try sdk.Resource.initOwned(allocator, .default);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
+    defer provider.deinit();
+
+    // Both views must be added BEFORE the instrument is created —
+    // views are applied at instrument construction time in provider.applyViews().
+    const View = @import("view.zig");
+    try provider.addView(View{
+        .instrument_selector = .{ .name = "counter.src" },
+        .name = "stream.a",
+        .description = null,
+        .attribute_allowed_keys = null,
+        .aggregation_override = null,
+    });
+    try provider.addView(View{
+        .instrument_selector = .{ .name = "counter.src" },
+        .name = "stream.b",
+        .description = null,
+        .attribute_allowed_keys = null,
+        .aggregation_override = null,
+    });
+
+    const mock_exporter = try allocator.create(MockMetricExporter);
+    mock_exporter.* = MockMetricExporter.init(allocator);
+
+    // provider.registerReader transfers ownership: provider.deinit() destroys
+    // the reader which destroys the exporter — no separate defer needed.
+    const reader = try allocator.create(sdk.ManualReader);
+    reader.* = try sdk.ManualReader.init(allocator, std.testing.io, mock_exporter.metricExporter());
+    try provider.registerReader(reader.reader());
+
+    const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
+    var meter = try provider.getMeterWithScope(scope);
+
+    const counter = try meter.createCounter(i64, "counter.src", "Source counter", "requests", null);
+    counter.add(&[_]api.ContextKeyValue{}, 7, &[_]api.AttributeKeyValue{});
+
+    reader.collect();
+
+    // Both renamed streams must be present and independent.
+    try testing.expectEqual(@as(usize, 2), mock_exporter.metricCount());
+
+    var buf_a: [1]sdk.MetricData = undefined;
+    const matches_a = mock_exporter.getMetricsNamed(&buf_a, "stream.a");
+    try testing.expectEqual(@as(usize, 1), matches_a.len);
+    try testing.expectEqual(sdk.MetricType.sum, matches_a[0].type);
+    try testing.expect(matches_a[0].data_points.len > 0);
+    try testing.expectEqual(@as(i64, 7), matches_a[0].data_points[0].value.i64_sum);
+
+    var buf_b: [1]sdk.MetricData = undefined;
+    const matches_b = mock_exporter.getMetricsNamed(&buf_b, "stream.b");
+    try testing.expectEqual(@as(usize, 1), matches_b.len);
+    try testing.expectEqual(sdk.MetricType.sum, matches_b[0].type);
+    try testing.expect(matches_b[0].data_points.len > 0);
+    try testing.expectEqual(@as(i64, 7), matches_b[0].data_points[0].value.i64_sum);
+
+    // The original instrument name must NOT appear — both views rename it.
+    var buf_src: [1]sdk.MetricData = undefined;
+    try testing.expectEqual(@as(usize, 0), mock_exporter.getMetricsNamed(&buf_src, "counter.src").len);
+}
+
+test "View multi-stream: two renaming views on an ObservableGauge produce two independent streams" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const resource = try sdk.Resource.initOwned(allocator, .default);
+    var provider = sdk.MeterProvider.init(allocator, std.testing.io, resource);
+    defer provider.deinit();
+
+    // Views must be added BEFORE the instrument is created.
+    const View = @import("view.zig");
+    try provider.addView(View{
+        .instrument_selector = .{ .name = "gauge.src" },
+        .name = "stream.a",
+        .description = null,
+        .attribute_allowed_keys = null,
+        .aggregation_override = null,
+    });
+    try provider.addView(View{
+        .instrument_selector = .{ .name = "gauge.src" },
+        .name = "stream.b",
+        .description = null,
+        .attribute_allowed_keys = null,
+        .aggregation_override = null,
+    });
+
+    const mock_exporter = try allocator.create(MockMetricExporter);
+    mock_exporter.* = MockMetricExporter.init(allocator);
+
+    const reader = try allocator.create(sdk.ManualReader);
+    reader.* = try sdk.ManualReader.init(allocator, std.testing.io, mock_exporter.metricExporter());
+    try provider.registerReader(reader.reader());
+
+    const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
+    var meter = try provider.getMeterWithScope(scope);
+
+    const obs = try meter.createObservableGauge(
+        f64, "gauge.src", "Source gauge", "ratio", null,
+        &[_]api.metrics.TypeErasedCallback(f64){},
+    );
+    const cb = struct {
+        fn callback(alloc: std.mem.Allocator, result: *api.metrics.ObservableResult(f64)) void {
+            result.observe(alloc, 0.5, &[_]api.AttributeKeyValue{});
+        }
+    }.callback;
+    // unregister runs before provider.deinit() (defers are LIFO) — correct order.
+    const handle = try obs.registerCallbackNoState(cb);
+    defer handle.unregister();
+
+    // ManualReader.collect() drives observable callbacks synchronously via
+    // meter.triggerObservables() — no std.Io.sleep needed.
+    reader.collect();
+
+    try testing.expectEqual(@as(usize, 2), mock_exporter.metricCount());
+
+    var buf_a: [1]sdk.MetricData = undefined;
+    const matches_a = mock_exporter.getMetricsNamed(&buf_a, "stream.a");
+    try testing.expectEqual(@as(usize, 1), matches_a.len);
+    try testing.expectEqual(sdk.MetricType.gauge, matches_a[0].type);
+
+    var buf_b: [1]sdk.MetricData = undefined;
+    const matches_b = mock_exporter.getMetricsNamed(&buf_b, "stream.b");
+    try testing.expectEqual(@as(usize, 1), matches_b.len);
+    try testing.expectEqual(sdk.MetricType.gauge, matches_b[0].type);
+
+    // The original instrument name must NOT appear.
+    var buf_src: [1]sdk.MetricData = undefined;
+    try testing.expectEqual(@as(usize, 0), mock_exporter.getMetricsNamed(&buf_src, "gauge.src").len);
+}

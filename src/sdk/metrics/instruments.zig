@@ -192,12 +192,25 @@ fn Instrument(comptime inst_type: api.metrics.InstrumentType, comptime base_type
                             .histogram_boundaries = if (self.advisory_params) |adv| adv.explicit_bucket_boundaries else null,
                         };
 
+                        // When a view renames the metric stream, include the new name in the
+                        // aggregation key so two views on the same instrument with different
+                        // output names produce independent aggregation slots.
+                        const view_hash = if (view.view.name != null)
+                            sdk.MetricMetadata.computeHash(
+                                metadata.name,
+                                metadata.unit,
+                                metadata.instrument_type,
+                                &metadata.instrumentation_scope,
+                            )
+                        else
+                            self.metadata_hash;
+
                         // Forward to all readers
                         for (self.meter.provider.readers.items) |*reader| {
                             reader.recordMeasurement(switch (base_type) {
                                 .int => .{ .i64 = value },
                                 .float => .{ .f64 = value },
-                            }, attrs, metadata, self.metadata_hash);
+                            }, attrs, metadata, view_hash);
                         }
                     }
                 }
@@ -362,12 +375,25 @@ fn Instrument(comptime inst_type: api.metrics.InstrumentType, comptime base_type
                             .histogram_boundaries = if (self.advisory_params) |adv| adv.explicit_bucket_boundaries else null,
                         };
 
+                        // When a view renames the metric stream, include the new name in the
+                        // aggregation key so two views on the same instrument with different
+                        // output names produce independent aggregation slots.
+                        const view_hash = if (view.view.name != null)
+                            sdk.MetricMetadata.computeHash(
+                                metadata.name,
+                                metadata.unit,
+                                metadata.instrument_type,
+                                &metadata.instrumentation_scope,
+                            )
+                        else
+                            self.metadata_hash;
+
                         // Forward to all readers
                         for (self.meter.provider.readers.items) |*reader| {
                             reader.recordMeasurement(switch (base_type) {
                                 .int => .{ .i64 = value },
                                 .float => .{ .f64 = value },
-                            }, attrs, metadata, self.metadata_hash);
+                            }, attrs, metadata, view_hash);
                         }
                     }
                 }

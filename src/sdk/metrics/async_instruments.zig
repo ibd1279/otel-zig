@@ -353,6 +353,19 @@ pub fn Observable(comptime T: type) type {
                         .histogram_boundaries = if (self.advisory_params) |adv| adv.explicit_bucket_boundaries else null,
                     };
 
+                    // When a view renames the metric stream, include the new name in the
+                    // aggregation key so two views on the same instrument with different
+                    // output names produce independent aggregation slots.
+                    const view_hash = if (view.view.name != null)
+                        sdk.MetricMetadata.computeHash(
+                            metadata.name,
+                            metadata.unit,
+                            metadata.instrument_type,
+                            &metadata.instrumentation_scope,
+                        )
+                    else
+                        self.metadata_hash;
+
                     reader.recordMeasurement(
                         switch (T) {
                             i64 => .{ .i64 = measurement.value },
@@ -361,7 +374,7 @@ pub fn Observable(comptime T: type) type {
                         },
                         attrs,
                         metadata,
-                        self.metadata_hash,
+                        view_hash,
                     );
                 }
             }
