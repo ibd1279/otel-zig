@@ -37,3 +37,6 @@ zig-pkg/
 
 # Claude Code project files
 .claude/
+
+# Pi implementation files
+.pi/
