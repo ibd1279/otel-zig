@@ -47,7 +47,7 @@ pub const StandardTracer = struct {
         name: []const u8,
         options: ?otel_api.trace.Span.StartOptions,
         ctx: []const otel_api.ContextKeyValue,
-    ) !otel_api.trace.Span {
+    ) otel_api.trace.Span {
         if (self.is_shutdown.load(.monotonic)) return otel_api.trace.Span{ .noop = .invalid };
 
         // Get options or use defaults
@@ -120,21 +120,48 @@ pub const StandardTracer = struct {
                 } };
             },
             .record_only, .record_and_sample => {
-                const span_context = otel_api.trace.Span.Context{
-                    .trace_id = trace_id,
-                    .span_id = span_id,
-                    .trace_flags = trace_flags,
-                    .trace_state = if (sampling_result.trace_state) |ts| try self.provider.allocator.dupe(u8, ts) else null,
-                    .is_remote = false,
-                };
-                errdefer span_context.deinit(self.provider.allocator);
+                const span_context = sc_blk: {
+                    const maybe_trace_state = if (sampling_result.trace_state) |ts| self.provider.allocator.dupe(u8, ts) catch ts_blk: {
+                        otel_api.common.reportResourceExhaustedError(.tracer, "startSpan", "Failed to copy trace state", null);
+                        break :ts_blk null;
+                    } else null;
 
-                const recording = try self.provider.allocator.create(sdk.trace.RecordingSpan);
-                recording.* = try sdk.trace.RecordingSpan.init(self, name);
+                    break :sc_blk otel_api.trace.Span.Context{
+                        .trace_id = trace_id,
+                        .span_id = span_id,
+                        .trace_flags = trace_flags,
+                        .trace_state = maybe_trace_state,
+                        .is_remote = false,
+                    };
+                };
+
+                const recording = self.provider.allocator.create(sdk.trace.RecordingSpan) catch {
+                    otel_api.common.reportResourceExhaustedError(.tracer, "startSpan", "Failed to create recording span", null);
+                    span_context.deinit(self.provider.allocator);
+                    return otel_api.trace.Span{ .noop = .{
+                        .trace_id = trace_id,
+                        .span_id = span_id,
+                        .trace_flags = trace_flags,
+                        .trace_state = null,
+                        .is_remote = false,
+                    } };
+                };
+                recording.* = sdk.trace.RecordingSpan.init(self, name) catch {
+                    otel_api.common.reportResourceExhaustedError(.tracer, "startSpan", "Failed to create recording span", null);
+                    self.provider.allocator.destroy(recording);
+                    span_context.deinit(self.provider.allocator);
+                    return otel_api.trace.Span{ .noop = .{
+                        .trace_id = trace_id,
+                        .span_id = span_id,
+                        .trace_flags = trace_flags,
+                        .trace_state = null,
+                        .is_remote = false,
+                    } };
+                };
 
                 // Add links from StartOptions to the recording span
                 if (links.len > 0) {
-                    try recording.addLinks(links);
+                    recording.addLinks(links) catch {};
                 }
 
                 // Add attributes from StartOptions to the recording span

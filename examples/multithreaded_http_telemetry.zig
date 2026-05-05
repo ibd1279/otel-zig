@@ -253,7 +253,7 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
         });
 
         // Create root span for this operation
-        var root_span = try tracer.startSpan("process_number_pair", .{
+        var root_span = tracer.startSpan("process_number_pair", .{
             .kind = .client,
             .attributes = &[_]otel_api.common.AttributeKeyValue{
                 .{ .key = "iteration", .value = .{ .int = @intCast(iteration) } },
@@ -299,7 +299,7 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
         // Create child span for HTTP request
         const child_ctx = try otel_api.trace.trace_context.withActiveSpanContext(shared_state.allocator, ctx, root_span.getSpanContext());
         defer otel_api.ContextKeyValue.deinitOwnedSlice(shared_state.allocator, @constCast(child_ctx));
-        var http_span = try tracer.startSpan("http_request", .{
+        var http_span = tracer.startSpan("http_request", .{
             .kind = .client,
             .attributes = &[_]otel_api.common.AttributeKeyValue{
                 .{ .key = otel_semconv.trace.HTTP_METHOD, .value = .{ .string = otel_semconv.trace.HttpMethodValues.GET } },
@@ -661,7 +661,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !voi
         };
         defer otel_api.ContextKeyValue.deinitOwnedSlice(shared_state.allocator, ctx);
 
-        var span = try tracer.startSpan("GET /multiply/{}/{}", otel_api.trace.Span.StartOptions{
+        var span = tracer.startSpan("GET /multiply/{}/{}", otel_api.trace.Span.StartOptions{
             .kind = .server,
         }, ctx);
         defer {

@@ -66,12 +66,8 @@ pub const Tracer = union(enum) {
     ///
     /// ## Error Handling
     /// - **Validation errors**: Reported via error handler, operation continues
-    /// - **System errors**: Memory allocation failures still propagate as errors
+    /// - **System errors**: Memory allocation failures may result in an incomplete or noop span.
     /// - **No-op fallback**: On critical failures, returns non-recording span
-    ///
-    /// ## Performance
-    /// - **Release builds**: No validation overhead
-    /// - **Debug builds**: Minimal overhead for validation checks
     ///
     /// ## Returns
     /// Always returns a valid `Span` (may be no-op on critical failures)
@@ -80,10 +76,10 @@ pub const Tracer = union(enum) {
         name: []const u8,
         options: ?api.trace.Span.StartOptions,
         ctx: []const api.ContextKeyValue,
-    ) !api.trace.Span {
+    ) api.trace.Span {
         return switch (self.*) {
             .noop => .{ .noop = api.trace.Span.Context.invalid },
-            .bridge => |*bridge| try bridge.startSpanFn(bridge.tracer_ptr, name, options, ctx),
+            .bridge => |*bridge| bridge.startSpanFn(bridge.tracer_ptr, name, options, ctx),
         };
     }
 
@@ -112,7 +108,7 @@ pub const TracerBridge = struct {
         name: []const u8,
         options: ?api.trace.Span.StartOptions,
         ctx: []const api.ContextKeyValue,
-    ) anyerror!api.trace.Span,
+    ) api.trace.Span,
     enabledFn: *const fn (tracer_ptr: *anyopaque) bool,
 
     pub fn init(ptr: anytype) TracerBridge {
@@ -125,7 +121,7 @@ pub const TracerBridge = struct {
                 name: []const u8,
                 options: ?api.trace.Span.StartOptions,
                 ctx: []const api.ContextKeyValue,
-            ) anyerror!api.trace.Span {
+            ) api.trace.Span {
                 const self: T = @ptrCast(@alignCast(pointer));
                 return ptr_info.pointer.child.startSpan(self, name, options, ctx);
             }

@@ -117,7 +117,7 @@ Traces is similar to metrics. This example uses the stream exporter to output to
     const ctx = &[_]otel_api.ContextKeyValue{};
 
     // Start a parent span
-    const parent_result = try tracer.startSpan("parent-operation", .{
+    const parent_result = tracer.startSpan("parent-operation", .{
         .kind = .server,
         .attributes = &[_]otel_api.common.AttributeKeyValue{
             .{

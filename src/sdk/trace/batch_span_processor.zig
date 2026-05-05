@@ -401,7 +401,7 @@ test "BatchSpanProcessor - span queuing and export" {
 
     const recording_span_ctx = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, span_context);
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, recording_span_ctx);
-    var recording_span = try tracer.startSpan("test-span", .{}, recording_span_ctx);
+    var recording_span = tracer.startSpan("test-span", .{}, recording_span_ctx);
     defer recording_span.deinit();
 
     // Test adding span to queue
@@ -474,17 +474,17 @@ test "BatchSpanProcessor - queue overflow drops newest" {
 
     const span1_ctx = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, span_context1);
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, span1_ctx);
-    var span1 = try tracer.startSpan("test-span-1", .{}, span1_ctx);
+    var span1 = tracer.startSpan("test-span-1", .{}, span1_ctx);
     defer span1.deinit();
 
     const span2_ctx = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, span_context2);
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, span2_ctx);
-    var span2 = try tracer.startSpan("test-span-2", .{}, span2_ctx);
+    var span2 = tracer.startSpan("test-span-2", .{}, span2_ctx);
     defer span2.deinit();
 
     const span3_ctx = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, span_context3);
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, span3_ctx);
-    var span3 = try tracer.startSpan("test-span-3", .{}, span3_ctx);
+    var span3 = tracer.startSpan("test-span-3", .{}, span3_ctx);
     defer span3.deinit();
 
     // Fill queue to capacity
@@ -544,7 +544,7 @@ test "BatchSpanProcessor - shutdown behavior" {
 
     const test_span_ctx = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, span_context);
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, test_span_ctx);
-    var test_span = try tracer.startSpan("test-span", .{}, test_span_ctx);
+    var test_span = tracer.startSpan("test-span", .{}, test_span_ctx);
     defer test_span.deinit();
 
     test_span.end(null); // Should be handled gracefully after shutdown
@@ -598,19 +598,19 @@ test "BatchSpanProcessor - setExporter drains and frees old exporter" {
 
     const ctx1 = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, make_ctx(1));
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, ctx1);
-    var s1 = try tracer.startSpan("span-1", .{}, ctx1);
+    var s1 = tracer.startSpan("span-1", .{}, ctx1);
     defer s1.deinit();
     s1.end(null);
 
     const ctx2 = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, make_ctx(2));
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, ctx2);
-    var s2 = try tracer.startSpan("span-2", .{}, ctx2);
+    var s2 = tracer.startSpan("span-2", .{}, ctx2);
     defer s2.deinit();
     s2.end(null);
 
     const ctx3 = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, make_ctx(3));
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, ctx3);
-    var s3 = try tracer.startSpan("span-3", .{}, ctx3);
+    var s3 = tracer.startSpan("span-3", .{}, ctx3);
     defer s3.deinit();
     s3.end(null);
 
@@ -642,7 +642,7 @@ test "BatchSpanProcessor - setExporter drains and frees old exporter" {
     // Queue 1 more span and flush — it must arrive at mock_exporter_2, not the old one.
     const ctx4 = try otel_api.trace.trace_context.withActiveSpanContext(allocator, &.{}, make_ctx(4));
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, ctx4);
-    var s4 = try tracer.startSpan("span-4", .{}, ctx4);
+    var s4 = tracer.startSpan("span-4", .{}, ctx4);
     defer s4.deinit();
     s4.end(null);
 

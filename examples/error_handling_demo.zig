@@ -231,12 +231,12 @@ fn demonstrateValidationErrors(allocator: std.mem.Allocator) !void {
     std.debug.print("1. Testing span name validation:\n", .{});
 
     // Test empty span name (reported in debug mode)
-    var span1 = try tracer.startSpan("", .{}, ctx);
+    var span1 = tracer.startSpan("", .{}, ctx);
     defer span1.deinit();
     std.debug.print("   Created span with empty name\n", .{});
 
     // Test valid span name
-    var span2 = try tracer.startSpan("valid-operation", .{}, ctx);
+    var span2 = tracer.startSpan("valid-operation", .{}, ctx);
     defer span2.deinit();
     std.debug.print("   Created span with valid name\n", .{});
 
@@ -327,7 +327,7 @@ fn measurePerformanceImpact(io: std.Io, allocator: std.mem.Allocator) !void {
 
     const ctx = &.{};
 
-    var span = try tracer.startSpan("performance-test", .{}, ctx);
+    var span = tracer.startSpan("performance-test", .{}, ctx);
     defer span.deinit();
 
     const iterations = 10000;
@@ -384,7 +384,7 @@ fn demonstrateErrorRecovery(allocator: std.mem.Allocator) !void {
     // Defensive span creation with fallback
     const span_name = ""; // Problematic input
 
-    var span = try tracer.startSpan(span_name, .{}, ctx);
+    var span = tracer.startSpan(span_name, .{}, ctx);
     defer span.deinit();
     std.debug.print("   Created span with invalid name ({s})\n", .{switch (span) {
         .bridge => |b| blk: {

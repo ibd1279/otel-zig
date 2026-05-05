@@ -41,7 +41,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Start a parent span
     std.debug.print("Starting parent span...\n", .{});
-    const parent_result = try tracer.startSpan("parent-operation", .{
+    const parent_result = tracer.startSpan("parent-operation", .{
         .kind = .server,
         .attributes = &[_]otel_api.common.AttributeKeyValue{
             .{
@@ -73,7 +73,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print("Starting child span...\n", .{});
     const child_ctx = try otel_api.trace.trace_context.withActiveSpanContext(allocator, ctx, parent_span.getSpanContext());
     defer otel_api.ContextKeyValue.deinitOwnedSlice(allocator, child_ctx);
-    const child_result = try tracer.startSpan("database-query", .{
+    const child_result = tracer.startSpan("database-query", .{
         .kind = .client,
         .attributes = &[_]otel_api.common.AttributeKeyValue{
             .{

@@ -126,7 +126,7 @@ pub fn main(init: std.process.Init) !void {
     // Create some spans
     std.debug.print("Creating spans...\n", .{});
     for (0..5) |i| {
-        var span = try tracer.startSpan("test-span", .{
+        var span = tracer.startSpan("test-span", .{
             .attributes = &[_]otel_api.common.AttributeKeyValue{
                 .{ .key = "index", .value = .{ .int = @intCast(i) } },
             },
@@ -157,7 +157,7 @@ pub fn main(init: std.process.Init) !void {
     // Test 2: Create more spans and flush again
     std.debug.print("\n[TEST 2] Creating more spans and flushing again\n", .{});
     for (5..8) |i| {
-        var span = try tracer.startSpan("test-span-2", .{
+        var span = tracer.startSpan("test-span-2", .{
             .attributes = &[_]otel_api.common.AttributeKeyValue{
                 .{ .key = "index", .value = .{ .int = @intCast(i) } },
             },
@@ -203,7 +203,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Create many spans to make export take longer
     for (0..20) |i| {
-        var span = try tracer.startSpan("bulk-span", .{
+        var span = tracer.startSpan("bulk-span", .{
             .attributes = &[_]otel_api.common.AttributeKeyValue{
                 .{ .key = "bulk_index", .value = .{ .int = @intCast(i) } },
             },
