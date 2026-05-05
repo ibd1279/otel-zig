@@ -1,104 +1,117 @@
 //! OpenTelemetry Messaging Semantic Conventions
 //!
-//! This module defines standard messaging attribute names according to
-//! the OpenTelemetry semantic conventions specification.
-//!
-//! These conventions ensure consistent naming for messaging-related attributes
-//! across different implementations and languages.
-//!
-//! See: https://github.com/open-telemetry/opentelemetry-specification/blob/main/specification/trace/semantic_conventions/messaging.md
+//! Attributes for messaging / queue / pub-sub instrumentation.
+//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.41.0/model/messaging
 
-// General messaging attributes
-pub const MESSAGING_SYSTEM = "messaging.system";
-pub const MESSAGING_DESTINATION = "messaging.destination";
-pub const MESSAGING_DESTINATION_KIND = "messaging.destination_kind";
-pub const MESSAGING_TEMP_DESTINATION = "messaging.temp_destination";
-pub const MESSAGING_PROTOCOL = "messaging.protocol";
-pub const MESSAGING_PROTOCOL_VERSION = "messaging.protocol_version";
-pub const MESSAGING_URL = "messaging.url";
-pub const MESSAGING_MESSAGE_ID = "messaging.message_id";
-pub const MESSAGING_CONVERSATION_ID = "messaging.conversation_id";
-pub const MESSAGING_MESSAGE_PAYLOAD_SIZE_BYTES = "messaging.message_payload_size_bytes";
-pub const MESSAGING_MESSAGE_PAYLOAD_COMPRESSED_SIZE_BYTES = "messaging.message_payload_compressed_size_bytes";
-pub const MESSAGING_OPERATION = "messaging.operation";
+// General attributes
 
-// Messaging system values
-pub const MessagingSystemValues = struct {
-    pub const ACTIVEMQ = "activemq";
-    pub const AWS_SQS = "aws_sqs";
-    pub const AWS_EVENTBRIDGE = "aws_eventbridge";
-    pub const AWS_SNS = "aws_sns";
-    pub const AWS_KINESIS = "aws_kinesis";
-    pub const AZURE_SERVICEBUS = "azure_servicebus";
-    pub const AZURE_EVENTHUBS = "azure_eventhubs";
-    pub const AZURE_EVENTGRID = "azure_eventgrid";
-    pub const KAFKA = "kafka";
-    pub const RABBITMQ = "rabbitmq";
-    pub const ROCKETMQ = "rocketmq";
-    pub const GCP_PUBSUB = "gcp_pubsub";
-    pub const JMS = "jms";
-    pub const IBMMQ = "ibmmq";
-    pub const PULSAR = "pulsar";
+pub const SYSTEM = "messaging.system";
+pub const OPERATION_TYPE = "messaging.operation.type";
+pub const OPERATION_NAME = "messaging.operation.name";
+pub const CLIENT_ID = "messaging.client.id";
+
+pub const System = struct {
+    pub const activemq = "activemq";
+    pub const @"aws.sns" = "aws.sns";
+    pub const aws_sqs = "aws_sqs";
+    pub const eventgrid = "eventgrid";
+    pub const eventhubs = "eventhubs";
+    pub const servicebus = "servicebus";
+    pub const gcp_pubsub = "gcp_pubsub";
+    pub const jms = "jms";
+    pub const kafka = "kafka";
+    pub const rabbitmq = "rabbitmq";
+    pub const rocketmq = "rocketmq";
+    pub const pulsar = "pulsar";
 };
 
-// Messaging destination kind values
-pub const MessagingDestinationKindValues = struct {
-    pub const QUEUE = "queue";
-    pub const TOPIC = "topic";
+pub const OperationType = struct {
+    pub const create = "create";
+    pub const send = "send";
+    pub const receive = "receive";
+    pub const process = "process";
+    pub const settle = "settle";
+    // Note: "deliver" (renamed to "process") and "publish" (renamed to "send") are deprecated — omitted.
 };
 
-// Messaging operation values
-pub const MessagingOperationValues = struct {
-    pub const PUBLISH = "publish";
-    pub const RECEIVE = "receive";
-    pub const PROCESS = "process";
+// Destination
+
+pub const DESTINATION_NAME = "messaging.destination.name";
+pub const DESTINATION_SUBSCRIPTION_NAME = "messaging.destination.subscription.name";
+pub const DESTINATION_TEMPLATE = "messaging.destination.template";
+pub const DESTINATION_ANONYMOUS = "messaging.destination.anonymous";
+pub const DESTINATION_TEMPORARY = "messaging.destination.temporary";
+pub const DESTINATION_PARTITION_ID = "messaging.destination.partition.id";
+
+// Consumer
+
+pub const CONSUMER_GROUP_NAME = "messaging.consumer.group.name";
+
+// Message
+
+pub const MESSAGE_ID = "messaging.message.id";
+pub const MESSAGE_CONVERSATION_ID = "messaging.message.conversation_id";
+pub const MESSAGE_ENVELOPE_SIZE = "messaging.message.envelope.size";
+pub const MESSAGE_BODY_SIZE = "messaging.message.body.size";
+
+// Batch
+
+pub const BATCH_MESSAGE_COUNT = "messaging.batch.message_count";
+
+// Kafka-specific attributes
+
+pub const KAFKA_MESSAGE_KEY = "messaging.kafka.message.key";
+pub const KAFKA_OFFSET = "messaging.kafka.offset";
+pub const KAFKA_MESSAGE_TOMBSTONE = "messaging.kafka.message.tombstone";
+
+// RabbitMQ-specific attributes
+
+pub const RABBITMQ_DESTINATION_ROUTING_KEY = "messaging.rabbitmq.destination.routing_key";
+pub const RABBITMQ_MESSAGE_DELIVERY_TAG = "messaging.rabbitmq.message.delivery_tag";
+
+// RocketMQ-specific attributes
+
+pub const ROCKETMQ_NAMESPACE = "messaging.rocketmq.namespace";
+pub const ROCKETMQ_CONSUMPTION_MODEL = "messaging.rocketmq.consumption_model";
+pub const ROCKETMQ_MESSAGE_TYPE = "messaging.rocketmq.message.type";
+pub const ROCKETMQ_MESSAGE_TAG = "messaging.rocketmq.message.tag";
+pub const ROCKETMQ_MESSAGE_KEYS = "messaging.rocketmq.message.keys";
+pub const ROCKETMQ_MESSAGE_GROUP = "messaging.rocketmq.message.group";
+pub const ROCKETMQ_MESSAGE_DELIVERY_TIMESTAMP = "messaging.rocketmq.message.delivery_timestamp";
+pub const ROCKETMQ_MESSAGE_DELAY_TIME_LEVEL = "messaging.rocketmq.message.delay_time_level";
+
+pub const RocketmqConsumptionModel = struct {
+    pub const clustering = "clustering";
+    pub const broadcasting = "broadcasting";
 };
 
-// RabbitMQ specific attributes
-pub const MESSAGING_RABBITMQ_ROUTING_KEY = "messaging.rabbitmq.routing_key";
-
-// Kafka specific attributes
-pub const MESSAGING_KAFKA_MESSAGE_KEY = "messaging.kafka.message_key";
-pub const MESSAGING_KAFKA_CONSUMER_GROUP = "messaging.kafka.consumer_group";
-pub const MESSAGING_KAFKA_CLIENT_ID = "messaging.kafka.client_id";
-pub const MESSAGING_KAFKA_PARTITION = "messaging.kafka.partition";
-pub const MESSAGING_KAFKA_TOMBSTONE = "messaging.kafka.tombstone";
-pub const MESSAGING_KAFKA_MESSAGE_OFFSET = "messaging.kafka.message.offset";
-
-// RocketMQ specific attributes
-pub const MESSAGING_ROCKETMQ_NAMESPACE = "messaging.rocketmq.namespace";
-pub const MESSAGING_ROCKETMQ_CLIENT_GROUP = "messaging.rocketmq.client_group";
-pub const MESSAGING_ROCKETMQ_CLIENT_ID = "messaging.rocketmq.client_id";
-pub const MESSAGING_ROCKETMQ_MESSAGE_DELIVERY_TIMESTAMP = "messaging.rocketmq.message.delivery_timestamp";
-pub const MESSAGING_ROCKETMQ_MESSAGE_GROUP = "messaging.rocketmq.message.group";
-pub const MESSAGING_ROCKETMQ_MESSAGE_TYPE = "messaging.rocketmq.message.type";
-pub const MESSAGING_ROCKETMQ_MESSAGE_TAG = "messaging.rocketmq.message.tag";
-pub const MESSAGING_ROCKETMQ_MESSAGE_KEYS = "messaging.rocketmq.message.keys";
-pub const MESSAGING_ROCKETMQ_CONSUMPTION_MODEL = "messaging.rocketmq.consumption_model";
-
-// GCP Pub/Sub specific attributes
-pub const MESSAGING_GCP_PUBSUB_MESSAGE_ORDERING_KEY = "messaging.gcp_pubsub.message.ordering_key";
-
-// Azure Event Hubs specific attributes
-pub const MESSAGING_AZURE_EVENTHUBS_MESSAGE_ENQUEUED_TIME = "messaging.eventhubs.message.enqueued_time";
-
-// Consumer attributes
-pub const MESSAGING_CONSUMER = "messaging.consumer";
-pub const MESSAGING_CONSUMER_ID = "messaging.consumer.id";
-
-// Message batch attributes
-pub const MESSAGING_BATCH_MESSAGE_COUNT = "messaging.batch.message_count";
-
-// RocketMQ message type values
-pub const RocketMQMessageTypeValues = struct {
-    pub const NORMAL = "normal";
-    pub const FIFO = "fifo";
-    pub const DELAY = "delay";
-    pub const TRANSACTION = "transaction";
+pub const RocketmqMessageType = struct {
+    pub const normal = "normal";
+    pub const fifo = "fifo";
+    pub const delay = "delay";
+    pub const transaction = "transaction";
 };
 
-// RocketMQ consumption model values
-pub const RocketMQConsumptionModelValues = struct {
-    pub const CLUSTERING = "clustering";
-    pub const BROADCASTING = "broadcasting";
+// GCP Pub/Sub-specific attributes
+
+pub const GCP_PUBSUB_MESSAGE_ORDERING_KEY = "messaging.gcp_pubsub.message.ordering_key";
+pub const GCP_PUBSUB_MESSAGE_ACK_ID = "messaging.gcp_pubsub.message.ack_id";
+pub const GCP_PUBSUB_MESSAGE_ACK_DEADLINE = "messaging.gcp_pubsub.message.ack_deadline";
+pub const GCP_PUBSUB_MESSAGE_DELIVERY_ATTEMPT = "messaging.gcp_pubsub.message.delivery_attempt";
+
+// Azure Service Bus-specific attributes
+
+pub const SERVICEBUS_MESSAGE_DELIVERY_COUNT = "messaging.servicebus.message.delivery_count";
+pub const SERVICEBUS_MESSAGE_ENQUEUED_TIME = "messaging.servicebus.message.enqueued_time";
+pub const SERVICEBUS_DISPOSITION_STATUS = "messaging.servicebus.disposition_status";
+
+pub const ServicebusDispositionStatus = struct {
+    pub const complete = "complete";
+    pub const abandon = "abandon";
+    pub const dead_letter = "dead_letter";
+    pub const @"defer" = "defer";
 };
+
+// Azure Event Hubs-specific attributes
+
+pub const EVENTHUBS_MESSAGE_ENQUEUED_TIME = "messaging.eventhubs.message.enqueued_time";
