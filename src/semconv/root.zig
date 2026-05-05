@@ -33,6 +33,8 @@ pub const exception = @import("exception.zig");
 
 pub const http = @import("http.zig");
 pub const net = @import("network.zig");
+pub const url = @import("url.zig");
+pub const server = @import("server.zig");
 pub const db = @import("database.zig");
 pub const messaging = @import("messaging.zig");
 pub const rpc = @import("rpc.zig");
@@ -55,6 +57,8 @@ test "semconv module compilation" {
     _ = exception;
     _ = http;
     _ = net;
+    _ = url;
+    _ = server;
     _ = db;
     _ = messaging;
     _ = rpc;
