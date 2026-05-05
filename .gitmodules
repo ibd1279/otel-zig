@@ -4,3 +4,9 @@
 [submodule "opentelemetry-proto"]
 	path = opentelemetry-proto
 	url = https://github.com/open-telemetry/opentelemetry-proto.git
+[submodule "semantic-conventions"]
+	path = semantic-conventions
+	url = https://github.com/open-telemetry/semantic-conventions.git
+[submodule "semantic-conventions-genai"]
+	path = semantic-conventions-genai
+	url = https://github.com/open-telemetry/semantic-conventions-genai.git
