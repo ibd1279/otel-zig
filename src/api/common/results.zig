@@ -44,6 +44,9 @@ pub const ExportResult = enum {
     success,
     failure,
     timeout,
+    /// The export was intentionally skipped (e.g. io was canceled by the
+    /// caller). Treated as non-error: no diagnostic should be reported.
+    dropped,
 
     pub fn isSuccess(self: ExportResult) bool {
         return self == .success;
@@ -56,7 +59,7 @@ pub const ExportResult = enum {
     /// Convert ExportResult to ProcessResult
     pub fn asFlushResult(self: ExportResult) FlushResult {
         return switch (self) {
-            .success => .success,
+            .success, .dropped => .success,
             .failure => .failure,
             .timeout => .timeout,
         };

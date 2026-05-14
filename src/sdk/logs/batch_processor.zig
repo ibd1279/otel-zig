@@ -56,6 +56,7 @@ pub const BatchLogRecordProcessor = struct {
             .flush_complete = std.Io.Condition.init,
             .export_complete = std.Io.Condition.init,
             .thread = null,
+            .shutdown_signal = .unset,
             .export_interval_ms = config.export_interval_ms orelse 5000,
             .max_queue_size = config.max_queue_size orelse 2048,
             .log_queue = .empty,
@@ -76,6 +77,9 @@ pub const BatchLogRecordProcessor = struct {
     flush_complete: std.Io.Condition,
     export_complete: std.Io.Condition,
     thread: ?std.Thread,
+    /// Signaled in deinit() to wake the background thread immediately
+    /// rather than waiting up to export_interval_ms for the sleep to expire.
+    shutdown_signal: std.Io.Event,
     export_interval_ms: u32,
     max_queue_size: usize,
     log_queue: std.ArrayList(sdk.LogRecord),
@@ -112,6 +116,7 @@ pub const BatchLogRecordProcessor = struct {
             .flush_complete = std.Io.Condition.init,
             .export_complete = std.Io.Condition.init,
             .thread = null,
+            .shutdown_signal = .unset,
             .export_interval_ms = export_interval_ms orelse 5000,
             .max_queue_size = max_queue_size orelse 2048,
             .log_queue = .empty,
@@ -138,8 +143,10 @@ pub const BatchLogRecordProcessor = struct {
 
     /// Stop and cleanup the processor
     pub fn deinit(self: *BatchLogRecordProcessor) void {
-        // Signal shutdown; the export thread will observe this after its sleep expires
+        // Signal shutdown and wake the background thread immediately
+        // (without the signal it would sleep for up to export_interval_ms).
         self.is_shutdown.store(true, .release);
+        self.shutdown_signal.set(self.io);
 
         // Wait for thread to finish
         if (self.thread) |thread| {
@@ -297,9 +304,11 @@ pub const BatchLogRecordProcessor = struct {
         while (true) {
             if (self.is_shutdown.load(.acquire)) break;
 
-            // Sleep for the export interval
-            const duration = std.Io.Duration.fromMilliseconds(@intCast(self.export_interval_ms));
-            std.Io.sleep(self.io, duration, .awake) catch {};
+            // Sleep for the export interval or until signaled for shutdown.
+            const raw = std.Io.Duration.fromMilliseconds(@intCast(self.export_interval_ms));
+            const timeout = std.Io.Timeout{ .duration = .{ .raw = raw, .clock = .awake } };
+            self.shutdown_signal.waitTimeout(self.io, timeout) catch {};
+            self.shutdown_signal.reset();
 
             if (self.is_shutdown.load(.acquire)) break;
 

@@ -53,6 +53,9 @@ pub const PeriodicReader = struct {
     is_running: std.atomic.Value(bool),
     collection_in_progress: std.atomic.Value(bool),
     collection_complete: std.Io.Condition,
+    /// Signaled in deinit() to wake the collection thread immediately
+    /// rather than waiting up to collection_interval_ms for the sleep to expire.
+    shutdown_signal: std.Io.Event,
     thread: ?std.Thread,
     collection_interval_ms: u32,
     registered_meters: std.ArrayListUnmanaged(*sdk.Meter),
@@ -77,6 +80,7 @@ pub const PeriodicReader = struct {
             .is_running = std.atomic.Value(bool).init(false),
             .collection_in_progress = std.atomic.Value(bool).init(false),
             .collection_complete = std.Io.Condition.init,
+            .shutdown_signal = .unset,
             .thread = null,
             .collection_interval_ms = collection_interval_ms orelse 60000, // 60 seconds default
             .registered_meters = .empty,
@@ -103,9 +107,11 @@ pub const PeriodicReader = struct {
 
     /// Stop the background collection thread and clean up resources
     pub fn deinit(self: *PeriodicReader) void {
-        // Signal shutdown; the collection thread will observe this after its sleep expires
+        // Signal shutdown and wake the collection thread immediately
+        // (without the signal it would sleep for up to collection_interval_ms).
         self.is_shutdown.store(true, .release);
         self.is_running.store(false, .release);
+        self.shutdown_signal.set(self.io);
 
         // Wait for thread to finish
         if (self.thread) |thread| {
@@ -316,9 +322,11 @@ pub const PeriodicReader = struct {
         while (true) {
             if (self.is_shutdown.load(.acquire)) break;
 
-            // Sleep for the collection interval; shutdown wakes us via condition signal
-            const duration = std.Io.Duration.fromMilliseconds(@intCast(self.collection_interval_ms));
-            std.Io.sleep(self.io, duration, .awake) catch {};
+            // Sleep for the collection interval or until signaled for shutdown.
+            const raw = std.Io.Duration.fromMilliseconds(@intCast(self.collection_interval_ms));
+            const timeout = std.Io.Timeout{ .duration = .{ .raw = raw, .clock = .awake } };
+            self.shutdown_signal.waitTimeout(self.io, timeout) catch {};
+            self.shutdown_signal.reset();
 
             if (self.is_shutdown.load(.acquire)) break;
 

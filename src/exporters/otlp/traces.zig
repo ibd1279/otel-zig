@@ -91,6 +91,10 @@ pub const OtlpTraceExporter = struct {
         defer span_data.deinit(arena.allocator());
 
         const result = self.sendRequest(arena.allocator(), span_data) catch |err| {
+            // Canceled means the caller's io was canceled (e.g. user pressed
+            // Ctrl-C). Telemetry is best-effort; drop silently rather than
+            // printing a confusing network error for a deliberate interruption.
+            if (err == error.Canceled) return .dropped;
             error_handler.reportError(.{
                 .component = .exporter,
                 .operation = "otlp_trace_network",

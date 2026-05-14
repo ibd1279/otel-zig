@@ -104,7 +104,7 @@ pub const BasicSpanProcessor = struct {
 
         if (self.exporter) |exporter| {
             const result = exporter.exportSpans(&spans, resource);
-            if (result != .success) {
+            if (result == .failure or result == .timeout) {
                 error_handler.reportError(.{
                     .component = .processor,
                     .operation = "span_export",
