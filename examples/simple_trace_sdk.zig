@@ -34,7 +34,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Get a tracer
     const scope = otel_api.InstrumentationScope{ .name = "example-component", .version = "1.0.0" };
-    var tracer = try tp.getTracerWithScope(scope);
+    var tracer = tp.getTracerWithScope(scope);
 
     // Create a root context
     const ctx = &[_]otel_api.ContextKeyValue{};

@@ -379,7 +379,7 @@ test "BasicPeriodicProcessor - direct init vs pipeline init thread behavior" {
 
     // Create a basic meter for testing
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    _ = try provider.getMeterWithScope(scope);
+    _ = provider.getMeterWithScope(scope);
 
     // Start the thread manually (since we're not using pipeline)
     try processor.start();
@@ -390,7 +390,7 @@ test "BasicPeriodicProcessor - direct init vs pipeline init thread behavior" {
 
     // Create a second meter
     const scope2 = api.InstrumentationScope{ .name = "test.meter2", .version = "1.0.0" };
-    _ = try provider.getMeterWithScope(scope2);
+    _ = provider.getMeterWithScope(scope2);
 
     // Verify thread is still running and we have both meters
     try testing.expect(processor.is_running.load(.acquire));
@@ -468,7 +468,7 @@ test "PeriodicReader and Observable instrument test." {
     try processor.start();
 
     const scope = api.InstrumentationScope{ .name = "cardinality", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
     const ctx = &[_]api.ContextKeyValue{};
 
     const CbStruct = struct {

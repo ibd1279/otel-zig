@@ -197,6 +197,18 @@ pub fn build(b: *std.Build) void {
     });
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
+    // Async observable instrument integration tests
+    const async_observable_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/test/async_observable_integration.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+    async_observable_tests.root_module.addImport("otel-api", otel_api_mod);
+    async_observable_tests.root_module.addImport("otel-sdk", otel_sdk_mod);
+    const run_async_observable_tests = b.addRunArtifact(async_observable_tests);
+
     // Comprehensive error handling tests
     const comprehensive_error_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -217,6 +229,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_exporters_tests.step);
     test_step.dependOn(&run_integration_tests.step);
     test_step.dependOn(&run_comprehensive_error_tests.step);
+    test_step.dependOn(&run_async_observable_tests.step);
 
     const test_api_step = b.step("test-api", "Run API tests only");
     test_api_step.dependOn(&run_api_tests.step);
@@ -229,6 +242,9 @@ pub fn build(b: *std.Build) void {
 
     const test_error_handling_step = b.step("test-error-handling", "Run comprehensive error handling tests");
     test_error_handling_step.dependOn(&run_comprehensive_error_tests.step);
+
+    const test_async_observable_step = b.step("test-async-observable", "Run async observable instrument integration tests");
+    test_async_observable_step.dependOn(&run_async_observable_tests.step);
 
     // ========================================================================
     // Examples

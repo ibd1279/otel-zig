@@ -24,7 +24,7 @@ pub const MeterProvider = union(enum) {
     /// Get or create a meter for the given instrumentation scope
     /// Providers are expected to return the same meter when provided
     /// an identical scope.
-    pub inline fn getMeterWithScope(self: *const MeterProvider, scope: InstrumentationScope) !Meter {
+    pub inline fn getMeterWithScope(self: *const MeterProvider, scope: InstrumentationScope) Meter {
         return switch (self.*) {
             .noop => Meter{ .noop = scope },
             .bridge => |*bridge| bridge.getMeterWithScopeFn(bridge.provider_ptr, scope),
@@ -35,14 +35,14 @@ pub const MeterProvider = union(enum) {
 /// Bridge structure that holds SDK provider pointer and vtable
 pub const MeterProviderBridge = struct {
     provider_ptr: *anyopaque,
-    getMeterWithScopeFn: *const fn (provider_ptr: *anyopaque, scope: InstrumentationScope) anyerror!Meter,
+    getMeterWithScopeFn: *const fn (provider_ptr: *anyopaque, scope: InstrumentationScope) Meter,
 
     pub fn init(ptr: anytype) MeterProviderBridge {
         const T = @TypeOf(ptr);
         const ptr_info = @typeInfo(T);
 
         const VTable = struct {
-            pub fn getMeterWithScope(pointer: *anyopaque, scope: InstrumentationScope) anyerror!Meter {
+            pub fn getMeterWithScope(pointer: *anyopaque, scope: InstrumentationScope) Meter {
                 const self: T = @ptrCast(@alignCast(pointer));
                 return ptr_info.pointer.child.getMeterWithScope(self, scope);
             }

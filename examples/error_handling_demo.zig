@@ -224,7 +224,7 @@ fn cleanupOpenTelemetry(provider: *otel_sdk.trace.TracerProvider) void {
 
 fn demonstrateValidationErrors(allocator: std.mem.Allocator) !void {
     const scope = otel_api.InstrumentationScope{ .name = "error-demo", .version = "1.0.0" };
-    var tracer = try otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
+    var tracer = otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
 
     const ctx = &[_]otel_api.ContextKeyValue{};
 
@@ -323,7 +323,7 @@ fn demonstrateErrorTypes() !void {
 fn measurePerformanceImpact(io: std.Io, allocator: std.mem.Allocator) !void {
     _ = allocator;
     const scope = otel_api.InstrumentationScope{ .name = "perf-test", .version = "1.0.0" };
-    var tracer = try otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
+    var tracer = otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
 
     const ctx = &.{};
 
@@ -377,7 +377,7 @@ fn demonstrateErrorRecovery(allocator: std.mem.Allocator) !void {
     std.debug.print("\n2. Defensive span creation:\n", .{});
 
     const scope = otel_api.InstrumentationScope{ .name = "recovery-test", .version = "1.0.0" };
-    var tracer = try otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
+    var tracer = otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
 
     const ctx = &[_]otel_api.ContextKeyValue{};
 

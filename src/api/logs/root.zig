@@ -13,8 +13,9 @@
 //! ## Usage
 //! ```zig
 //! const otel_api = @import("otel-api");
-//! const logger = otel_api.logs.getGlobalLogger("my.library");
-//! logger.info(ctx, "Operation completed");
+//! const scope = otel_api.InstrumentationScope{ .name = "my.library" };
+//! var logger = otel_api.getGlobalLoggerProvider().getLoggerWithScope(scope);
+//! logger.emitLog(&.{}, .info, "Operation completed");
 //! ```
 
 const std = @import("std");

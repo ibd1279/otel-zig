@@ -55,7 +55,7 @@ std.log.info("This is really an OTel log.", .{});
 
 // normal otel calls still work too.
 const logger_scope = otel_api.InstrumentationScope{ .name = "multiply", .version = "1.0.0" };
-var logger = try logger_provider.getLoggerWithScope(logger_scope);
+var logger = logger_provider.getLoggerWithScope(logger_scope);
 logger.emitLog(
     &.{}, // context
     .info, // log level
@@ -84,7 +84,7 @@ defer {
 
 // Get a meter
 const scope = otel_api.InstrumentationScope{ .name = "example.metric.otlp", .version = "1.0.0" };
-var meter = try otel_api.getGlobalMeterProvider().getMeterWithScope(scope);
+var meter = otel_api.getGlobalMeterProvider().getMeterWithScope(scope);
 ```
 
 Traces is similar to metrics. This example uses the stream exporter to output to stderr.
@@ -111,7 +111,7 @@ Traces is similar to metrics. This example uses the stream exporter to output to
 
     // Get a tracer
     const scope = otel_api.InstrumentationScope{ .name = "example-component", .version = "1.0.0" };
-    var tracer = try tp.getTracerWithScope(scope);
+    var tracer = tp.getTracerWithScope(scope);
 
     // Create a root context
     const ctx = &[_]otel_api.ContextKeyValue{};

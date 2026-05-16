@@ -62,7 +62,7 @@ pub fn main(init: std.process.Init) !void {
     const ctx = &[_]otel_api.ContextKeyValue{};
 
     const scope = otel_api.InstrumentationScope{ .name = "dns.query.example", .version = "1.0.0" };
-    var app_logger = try otel_api.getGlobalLoggerProvider().getLoggerWithScope(scope);
+    var app_logger = otel_api.getGlobalLoggerProvider().getLoggerWithScope(scope);
 
     // Log application startup using proper log records
     const startup_attrs = try otel_api.common.AttributeBuilder.init(allocator)
@@ -150,7 +150,7 @@ fn performDnsQuery(ctx: []const otel_api.ContextKeyValue, allocator: std.mem.All
 
     // Get DNS operation logger from global registry
     const scope = otel_api.InstrumentationScope{ .name = "dns.resolver.otlp" };
-    var dns_logger = try otel_api.getGlobalLoggerProvider().getLoggerWithScope(scope);
+    var dns_logger = otel_api.getGlobalLoggerProvider().getLoggerWithScope(scope);
 
     // Log DNS query initiation
     dns_logger.emitLogRecord(

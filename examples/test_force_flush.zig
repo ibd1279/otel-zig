@@ -119,7 +119,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Get a tracer
     const scope = otel_api.InstrumentationScope{ .name = "force_flush_test", .version = "1.0.0" };
-    var tracer = try otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
+    var tracer = otel_api.getGlobalTracerProvider().getTracerWithScope(scope);
 
     const start_time: i64 = 0; // relative to program_start
 

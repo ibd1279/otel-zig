@@ -169,9 +169,9 @@ fn uptimeCallback(allocator: std.mem.Allocator, result: *otel_api.metrics.Observ
 fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !void {
     // Get instrumentation scope for the reader thread
     const reader_scope = otel_api.InstrumentationScope{ .name = "multithreaded-http-telemetry/number-reader", .version = "1.0.0" };
-    var logger = try otel_api.getGlobalLoggerProvider().getLoggerWithScope(reader_scope);
-    var meter = try otel_api.getGlobalMeterProvider().getMeterWithScope(reader_scope);
-    var tracer = try otel_api.getGlobalTracerProvider().getTracerWithScope(reader_scope);
+    var logger = otel_api.getGlobalLoggerProvider().getLoggerWithScope(reader_scope);
+    var meter = otel_api.getGlobalMeterProvider().getMeterWithScope(reader_scope);
+    var tracer = otel_api.getGlobalTracerProvider().getTracerWithScope(reader_scope);
 
     // Create metrics instruments
     const numbers_counter = try meter.createCounter(
@@ -241,15 +241,15 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
         const ctx = &[_]otel_api.context.ContextKeyValue{};
         numbers_counter.add(ctx, 2, &[_]otel_api.common.AttributeKeyValue{
             .{ .key = "source", .value = .{ .string = "random" } },
-            .{ .key = otel_semconv.trace.THREAD_NAME, .value = .{ .string = "reader" } },
+            .{ .key = "thread.name", .value = .{ .string = "reader" } },
         });
         numbers_histogram.record(ctx, @floatFromInt(num1), &[_]otel_api.common.AttributeKeyValue{
             .{ .key = "number_type", .value = .{ .string = "num1" } },
-            .{ .key = otel_semconv.trace.THREAD_NAME, .value = .{ .string = "reader" } },
+            .{ .key = "thread.name", .value = .{ .string = "reader" } },
         });
         numbers_histogram.record(ctx, @floatFromInt(num2), &[_]otel_api.common.AttributeKeyValue{
             .{ .key = "number_type", .value = .{ .string = "num2" } },
-            .{ .key = otel_semconv.trace.THREAD_NAME, .value = .{ .string = "reader" } },
+            .{ .key = "thread.name", .value = .{ .string = "reader" } },
         });
 
         // Create root span for this operation
@@ -259,7 +259,7 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
                 .{ .key = "iteration", .value = .{ .int = @intCast(iteration) } },
                 .{ .key = "num1", .value = .{ .int = @intCast(num1) } },
                 .{ .key = "num2", .value = .{ .int = @intCast(num2) } },
-                .{ .key = otel_semconv.trace.THREAD_NAME, .value = .{ .string = "reader" } },
+                .{ .key = "thread.name", .value = .{ .string = "reader" } },
             },
             .links = if (previous_span_context) |prev_ctx|
                 &[_]otel_api.trace.Span.Link{.{
@@ -302,11 +302,11 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
         var http_span = tracer.startSpan("http_request", .{
             .kind = .client,
             .attributes = &[_]otel_api.common.AttributeKeyValue{
-                .{ .key = otel_semconv.trace.HTTP_METHOD, .value = .{ .string = otel_semconv.trace.HttpMethodValues.GET } },
-                .{ .key = otel_semconv.trace.HTTP_URL, .value = .{ .string = url } },
-                .{ .key = otel_semconv.trace.HTTP_SCHEME, .value = .{ .string = "http" } },
-                .{ .key = otel_semconv.trace.NET_PEER_NAME, .value = .{ .string = shared_state.server_address } },
-                .{ .key = otel_semconv.trace.NET_PEER_PORT, .value = .{ .int = @intCast(shared_state.server_port) } },
+                .{ .key = otel_semconv.http.REQUEST_METHOD, .value = .{ .string = otel_semconv.http.RequestMethod.GET } },
+                .{ .key = otel_semconv.url.FULL, .value = .{ .string = url } },
+                .{ .key = otel_semconv.url.SCHEME, .value = .{ .string = "http" } },
+                .{ .key = otel_semconv.server.ADDRESS, .value = .{ .string = shared_state.server_address } },
+                .{ .key = otel_semconv.server.PORT, .value = .{ .int = @intCast(shared_state.server_port) } },
             },
         }, child_ctx);
         defer {
@@ -318,7 +318,7 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
         try http_span.addEvent(.{
             .name = "request.start",
             .attributes = &[_]otel_api.common.AttributeKeyValue{
-                .{ .key = otel_semconv.trace.HTTP_TARGET, .value = .{ .string = url } },
+                .{ .key = otel_semconv.url.PATH, .value = .{ .string = url } },
             },
         });
 
@@ -347,7 +347,7 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
         try http_span.addEvent(.{
             .name = "response.received",
             .attributes = &[_]otel_api.common.AttributeKeyValue{
-                .{ .key = otel_semconv.trace.HTTP_STATUS_CODE, .value = .{ .int = @intCast(http_context.status_code) } },
+                .{ .key = otel_semconv.http.RESPONSE_STATUS_CODE, .value = .{ .int = @intCast(http_context.status_code) } },
                 .{ .key = "response.result", .value = .{ .int = @intCast(http_context.result) } },
             },
         });
@@ -356,14 +356,14 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
         if (http_context.status_code == 500) {
             // Server returned error due to overflow
             http_span.setStatus(.{ .code = .@"error", .description = "Server error: result overflow" });
-            http_span.setAttribute(.{ .key = otel_semconv.trace.HTTP_STATUS_CODE, .value = .{ .int = 500 } });
+            http_span.setAttribute(.{ .key = otel_semconv.http.RESPONSE_STATUS_CODE, .value = .{ .int = 500 } });
 
             // Add error event
             try http_span.addEvent(.{
                 .name = "error",
                 .attributes = &[_]otel_api.common.AttributeKeyValue{
-                    .{ .key = otel_semconv.exception.EXCEPTION_TYPE, .value = .{ .string = "server_error" } },
-                    .{ .key = otel_semconv.exception.EXCEPTION_MESSAGE, .value = .{ .string = "Server returned 500: multiplication overflow" } },
+                    .{ .key = otel_semconv.exception.TYPE, .value = .{ .string = "server_error" } },
+                    .{ .key = otel_semconv.exception.MESSAGE, .value = .{ .string = "Server returned 500: multiplication overflow" } },
                     .{ .key = "num1_value", .value = .{ .int = @intCast(num1) } },
                     .{ .key = "num2_value", .value = .{ .int = @intCast(num2) } },
                     .{ .key = "server_result", .value = .{ .int = @intCast(http_context.result) } },
@@ -386,7 +386,7 @@ fn numberReaderThread(shared_state: *SharedState, config: Config, io: std.Io) !v
         } else {
             // Server returned success
             http_span.setStatus(.{ .code = .ok, .description = "Request successful" });
-            http_span.setAttribute(.{ .key = otel_semconv.trace.HTTP_STATUS_CODE, .value = .{ .int = 200 } });
+            http_span.setAttribute(.{ .key = otel_semconv.http.RESPONSE_STATUS_CODE, .value = .{ .int = 200 } });
             http_span.setAttribute(.{ .key = "result", .value = .{ .int = @intCast(http_context.result) } });
 
             logger.emitLog(
@@ -433,7 +433,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !voi
 
     // This would normally happen in the detect resources and would come from on env var.
     const core_resource = try otel_sdk.resource.Resource.initOwnedMerge(shared_state.allocator, root_resource, .{
-        .attributes = &.{ .{ .key = otel_semconv.SERVICE_NAME, .value = .{ .string = "multithreaded_http_telemetry/server" } }, .{ .key = otel_semconv.SERVICE_VERSION, .value = .{ .string = "1.0.0.0" } } },
+        .attributes = &.{ .{ .key = otel_semconv.resource.SERVICE_NAME, .value = .{ .string = "multithreaded_http_telemetry/server" } }, .{ .key = otel_semconv.resource.SERVICE_VERSION, .value = .{ .string = "1.0.0.0" } } },
     });
     defer core_resource.deinitOwned(shared_state.allocator);
 
@@ -499,7 +499,7 @@ fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !voi
 
     // Get instrumentation scope for the server thread
     const server_scope = otel_api.InstrumentationScope{ .name = "multiply", .version = "1.0.0" };
-    var logger = try logger_provider.getLoggerWithScope(server_scope);
+    var logger = logger_provider.getLoggerWithScope(server_scope);
 
     logger.emitLog(
         &.{},
@@ -557,8 +557,8 @@ fn httpServerThread(shared_state: *SharedState, config: Config, io: std.Io) !voi
         null, // event_name
     );
 
-    const tracer = try tracer_provider.getTracerWithScope(server_scope);
-    const meter = try meter_provider.getMeterWithScope(server_scope);
+    const tracer = tracer_provider.getTracerWithScope(server_scope);
+    const meter = meter_provider.getMeterWithScope(server_scope);
     const request_instrument = try meter.createCounter(i64, "product_request_count", null, "1", null);
 
     // Accept connections loop — exits when the Io.Group is cancelled.
@@ -915,7 +915,7 @@ pub fn main(init: std.process.Init) !void {
             .instrument_selector = .{ .name = "number_values" },
             .name = "numbers_by_thread",
             .description = "Number values grouped by thread only",
-            .attribute_allowed_keys = &[_][]const u8{otel_semconv.trace.THREAD_NAME},
+            .attribute_allowed_keys = &[_][]const u8{"thread.name"},
         },
 
         // View 2: Create a detailed version with both attributes
@@ -923,7 +923,7 @@ pub fn main(init: std.process.Init) !void {
             .instrument_selector = .{ .name = "number_values" },
             .name = "numbers_detailed",
             .description = "Detailed number values with all attributes",
-            .attribute_allowed_keys = &[_][]const u8{ "number_type", otel_semconv.trace.THREAD_NAME },
+            .attribute_allowed_keys = &[_][]const u8{ "number_type", "thread.name" },
         },
 
         // View 3: Drop debug metrics in production
@@ -1001,14 +1001,14 @@ pub fn main(init: std.process.Init) !void {
 
     // Log startup
     const main_scope = otel_api.InstrumentationScope{ .name = "multithreaded-http-telemetry/main", .version = "1.0.0" };
-    var main_logger = try otel_api.getGlobalLoggerProvider().getLoggerWithScope(main_scope);
+    var main_logger = otel_api.getGlobalLoggerProvider().getLoggerWithScope(main_scope);
 
     main_logger.emitLog(
         &.{},
         .info,
         "Application starting with enhanced telemetry",
         &[_]otel_api.common.AttributeKeyValue{
-            .{ .key = otel_semconv.SERVICE_VERSION, .value = .{ .string = "1.0.0" } },
+            .{ .key = otel_semconv.resource.SERVICE_VERSION, .value = .{ .string = "1.0.0" } },
             .{ .key = "server.port", .value = .{ .int = @intCast(shared_state.server_port) } },
             .{ .key = "features.views", .value = .{ .bool = true } },
             .{ .key = "features.observable_gauges", .value = .{ .bool = true } },
@@ -1302,7 +1302,7 @@ fn createServiceResource(allocator: std.mem.Allocator, io: std.Io) !@import("ote
 
     // 2. Create service resource with service name
     var service_attrs = otel_api.common.AttributeBuilder.init(allocator);
-    service_attrs = service_attrs.add(.{ .key = otel_semconv.SERVICE_NAME, .value = .{ .string = "multithreaded_http_telemetry" } });
+    service_attrs = service_attrs.add(.{ .key = otel_semconv.resource.SERVICE_NAME, .value = .{ .string = "multithreaded_http_telemetry" } });
     const service_resource = try Resource.initOwnedFromBuilder(
         allocator,
         null,

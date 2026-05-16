@@ -130,10 +130,25 @@ pub const TracerProvider = struct {
     }
 
     // TracerProvider interface implementation
-    pub fn getTracerWithScope(self: *TracerProvider, scope: api.InstrumentationScope) !api.trace.Tracer {
+    //
+    // Returns a noop tracer and reports to the OTel error handler if allocation fails.
+    pub fn getTracerWithScope(self: *TracerProvider, scope: api.InstrumentationScope) api.trace.Tracer {
         // Short circuit if the provider is shutdown.
         if (self.is_shutdown.load(.monotonic)) return .{ .noop = {} };
 
+        return self.getTracerWithScopeInternal(scope) catch |err| {
+            api.common.reportResourceExhaustedErrorWithSource(
+                .tracer,
+                "getTracerWithScope",
+                "Failed to allocate tracer for instrumentation scope; returning noop",
+                null,
+                err,
+            );
+            return api.trace.Tracer{ .noop = {} };
+        };
+    }
+
+    fn getTracerWithScopeInternal(self: *TracerProvider, scope: api.InstrumentationScope) !api.trace.Tracer {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
         // Return the existing tracer if it exists. Requires mutex for map scan.
@@ -202,7 +217,7 @@ test "TracerProvider basic operations" {
     var tp = provider_ptr.tracerProvider();
 
     // Get a tracer
-    const tracer1 = try tp.getTracerWithScope(.{
+    const tracer1 = tp.getTracerWithScope(.{
         .name = "test-tracer",
         .version = null,
         .schema_url = null,
@@ -211,7 +226,7 @@ test "TracerProvider basic operations" {
     _ = tracer1;
 
     // Get the same tracer again (should be cached)
-    const tracer2 = try tp.getTracerWithScope(.{
+    const tracer2 = tp.getTracerWithScope(.{
         .name = "test-tracer",
         .version = null,
         .schema_url = null,

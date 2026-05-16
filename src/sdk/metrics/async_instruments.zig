@@ -133,7 +133,7 @@ pub fn Observable(comptime T: type) type {
                     .name = "otel.sdk.metrics.async",
                     .version = "1.0.0", // TODO: Use actual SDK version
                 };
-                var internal_meter = try global_provider.getMeterWithScope(internal_scope);
+                var internal_meter = global_provider.getMeterWithScope(internal_scope);
 
                 // Create histogram for callback duration
                 callback_duration_histogram = try internal_meter.createHistogram(

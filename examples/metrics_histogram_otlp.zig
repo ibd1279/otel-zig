@@ -37,7 +37,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Get a meter
     const scope = otel_api.InstrumentationScope{ .name = "example.comprehensive.otlp", .version = "1.0.0" };
-    var meter = try otel_api.getGlobalMeterProvider().getMeterWithScope(scope);
+    var meter = otel_api.getGlobalMeterProvider().getMeterWithScope(scope);
 
     std.debug.print("=== Comprehensive OpenTelemetry Metrics OTLP Export Demo ===\n\n", .{});
 

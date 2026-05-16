@@ -219,7 +219,7 @@ test "ManualReader and Observable instrument test." {
     }
 
     const scope = api.InstrumentationScope{ .name = "cardinality", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
     const ctx = &[_]api.ContextKeyValue{};
 
     const CbStruct = struct {

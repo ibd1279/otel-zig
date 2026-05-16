@@ -59,9 +59,9 @@ test "BasicMeterProvider meter caching" {
     const scope2 = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" }; // Same
     const scope3 = api.InstrumentationScope{ .name = "other.meter", .version = "1.0.0" }; // Different
 
-    const meter1 = try provider.getMeterWithScope(scope1);
-    const meter2 = try provider.getMeterWithScope(scope2);
-    const meter3 = try provider.getMeterWithScope(scope3);
+    const meter1 = provider.getMeterWithScope(scope1);
+    const meter2 = provider.getMeterWithScope(scope2);
+    const meter3 = provider.getMeterWithScope(scope3);
 
     // Same scope should return same meter instance
     try testing.expect(meter1.bridge.meter_ptr == meter2.bridge.meter_ptr);
@@ -95,7 +95,7 @@ test "BasicMeter instrument creation and data collection" {
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     // Create various instrument types
     const counter_i64 = try meter.createCounter(i64, "test.counter.i64", "Test counter", "requests", null);
@@ -142,7 +142,7 @@ test "BasicMeter data collection through processor pipeline" {
 
     // Get meter
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     // Create instruments and record data
     const counter = try meter.createCounter(i64, "http.requests", "HTTP requests", "requests", null);
@@ -185,7 +185,7 @@ test "BasicMeter shutdown behavior" {
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     // Create counter and record data before shutdown
     const counter = try meter.createCounter(i64, "test.counter", "Test counter", "requests", null);
@@ -260,7 +260,7 @@ test "BasicMeter comprehensive instrument test with attributes" {
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     // Test custom histogram boundaries (for future use)
     _ = [_]f64{ 0.0, 1.0, 5.0, 10.0, 50.0 };
@@ -314,7 +314,7 @@ test "BasicMeter instrument creation after shutdown returns noop instruments" {
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     // Create instrument before shutdown - should be normal SDK instrument
     const counter_before = try meter.createCounter(i64, "test.counter.before", "Test counter", "requests", null);
@@ -365,7 +365,7 @@ test "PeriodicReader with multiple instruments" {
 
     // Get meter
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     // Create regular instruments
     const counter = try meter.createCounter(i64, "test.counter", "Test counter", "requests", null);
@@ -467,7 +467,7 @@ test "Meter returns same instrument pointer for identical instruments" {
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     // Test sync instrument (Counter) - request same instrument twice
     const counter1 = try meter.createCounter(i64, "test.counter", "Test counter", "requests", null);
@@ -506,7 +506,7 @@ test "Histogram uses advisory explicit bucket boundaries" {
     try provider.registerReader(reader.reader());
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     // Create custom bucket boundaries
     const custom_boundaries = [_]f64{ 0.0, 10.0, 50.0, 100.0 };
@@ -576,7 +576,7 @@ test "Advisory attributes filtering with and without views" {
         try provider.registerReader(reader.reader());
 
         const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-        var meter = try provider.getMeterWithScope(scope);
+        var meter = provider.getMeterWithScope(scope);
 
         // Create counter with advisory attributes filtering
         const allowed_attributes = [_][]const u8{ "method", "status" };
@@ -655,7 +655,7 @@ test "Advisory attributes filtering with and without views" {
         try provider.registerReader(reader.reader());
 
         const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-        var meter = try provider.getMeterWithScope(scope);
+        var meter = provider.getMeterWithScope(scope);
 
         // Create counter with advisory params (method, status)
         const allowed_attributes = [_][]const u8{ "method", "status" };
@@ -745,7 +745,7 @@ test "View multi-stream: two renaming views on a Counter produce two independent
     try provider.registerReader(reader.reader());
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     const counter = try meter.createCounter(i64, "counter.src", "Source counter", "requests", null);
     counter.add(&[_]api.ContextKeyValue{}, 7, &[_]api.AttributeKeyValue{});
@@ -807,10 +807,14 @@ test "View multi-stream: two renaming views on an ObservableGauge produce two in
     try provider.registerReader(reader.reader());
 
     const scope = api.InstrumentationScope{ .name = "test.meter", .version = "1.0.0" };
-    var meter = try provider.getMeterWithScope(scope);
+    var meter = provider.getMeterWithScope(scope);
 
     const obs = try meter.createObservableGauge(
-        f64, "gauge.src", "Source gauge", "ratio", null,
+        f64,
+        "gauge.src",
+        "Source gauge",
+        "ratio",
+        null,
         &[_]api.metrics.TypeErasedCallback(f64){},
     );
     const cb = struct {

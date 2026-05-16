@@ -396,7 +396,7 @@ test "BatchSpanProcessor - span queuing and export" {
     defer provider.deinit();
 
     try provider.registerProcessor(processor.spanProcessor());
-    const tracer = try provider.getTracerWithScope(.empty);
+    const tracer = provider.getTracerWithScope(.empty);
 
     // Create proper RecordingSpan for testing
     const span_context = otel_api.trace.Span.Context{
@@ -455,7 +455,7 @@ test "BatchSpanProcessor - queue overflow drops newest" {
 
     try provider.registerProcessor(processor.spanProcessor());
 
-    const tracer = try provider.getTracerWithScope(.empty);
+    const tracer = provider.getTracerWithScope(.empty);
 
     // Create proper RecordingSpans for testing
     const span_context1 = otel_api.trace.Span.Context{
@@ -534,7 +534,7 @@ test "BatchSpanProcessor - shutdown behavior" {
         &processor,
     ).done();
 
-    const tracer = try provider.getTracerWithScope(.empty);
+    const tracer = provider.getTracerWithScope(.empty);
 
     // Test shutdown
     try testing.expect(processor.is_shutdown.load(.monotonic) == false);
@@ -589,7 +589,7 @@ test "BatchSpanProcessor - setExporter drains and frees old exporter" {
     defer provider.deinit();
 
     try provider.registerProcessor(processor.spanProcessor());
-    const tracer = try provider.getTracerWithScope(.empty);
+    const tracer = provider.getTracerWithScope(.empty);
 
     // Queue 3 spans via onEnd().
     const make_ctx = struct {

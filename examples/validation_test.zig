@@ -90,7 +90,7 @@ fn testLoggerValidation() !void {
     print("-" ** 30 ++ "\n", .{});
 
     const scope = otel_api.InstrumentationScope{ .name = "validation.logger.test", .version = "1.0.0" };
-    var logger = try otel_api.getGlobalLoggerProvider().getLoggerWithScope(scope);
+    var logger = otel_api.getGlobalLoggerProvider().getLoggerWithScope(scope);
     const ctx = &[_]otel_api.ContextKeyValue{};
 
     const errors_before = error_count;
@@ -150,7 +150,7 @@ fn testMeterValidation() !void {
     print("-" ** 30 ++ "\n", .{});
 
     const scope = otel_api.InstrumentationScope{ .name = "validation.meter.test", .version = "1.0.0" };
-    var meter = try otel_api.getGlobalMeterProvider().getMeterWithScope(scope);
+    var meter = otel_api.getGlobalMeterProvider().getMeterWithScope(scope);
 
     const errors_before = error_count;
 

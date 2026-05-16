@@ -138,9 +138,7 @@ fn otelLogImpl(
 ) !void {
     // Get logger from global provider
     const logger_provider = api.getGlobalLoggerProvider();
-    var logger = logger_provider.getLoggerWithScope(bridge_state.instrumentation_scope) catch {
-        return error.LoggerCreationFailed;
-    };
+    var logger = logger_provider.getLoggerWithScope(bridge_state.instrumentation_scope);
 
     // Map severity
     const severity = mapLogLevelToSeverity(level);

@@ -21,7 +21,7 @@ pub const TracerProvider = union(enum) {
     /// Get or create a tracer with instrumentation scope (OpenTelemetry API specification compliant)
     ///
     /// Implementations must return the same tracer for the same scope.
-    pub inline fn getTracerWithScope(self: *const TracerProvider, scope: InstrumentationScope) !Tracer {
+    pub inline fn getTracerWithScope(self: *const TracerProvider, scope: InstrumentationScope) Tracer {
         return switch (self.*) {
             .noop => Tracer{ .noop = {} },
             .bridge => |*bridge| bridge.getTracerWithScopeFn(bridge.provider_ptr, scope),
@@ -32,14 +32,14 @@ pub const TracerProvider = union(enum) {
 /// Bridge structure that holds SDK provider pointer and vtable
 pub const TracerProviderBridge = struct {
     provider_ptr: *anyopaque,
-    getTracerWithScopeFn: *const fn (provider_ptr: *anyopaque, scope: InstrumentationScope) anyerror!Tracer,
+    getTracerWithScopeFn: *const fn (provider_ptr: *anyopaque, scope: InstrumentationScope) Tracer,
 
     pub fn init(ptr: anytype) TracerProviderBridge {
         const T = @TypeOf(ptr);
         const ptr_info = @typeInfo(T);
 
         const VTable = struct {
-            pub fn getTracerWithScope(pointer: *anyopaque, scope: InstrumentationScope) anyerror!Tracer {
+            pub fn getTracerWithScope(pointer: *anyopaque, scope: InstrumentationScope) Tracer {
                 const self: T = @ptrCast(@alignCast(pointer));
                 return ptr_info.pointer.child.getTracerWithScope(self, scope);
             }

@@ -56,7 +56,7 @@ test "BatchLogRecordProcessor basic functionality" {
 
     // Get logger
     const scope = api.InstrumentationScope{ .name = "test.batch.logger", .version = "1.0.0" };
-    var logger = try provider.getLoggerWithScope(scope);
+    var logger = provider.getLoggerWithScope(scope);
 
     // Emit a simple log record
     const ctx = try api.ContextKeyValue.initOwnedSlice(allocator, &.{});
@@ -112,7 +112,7 @@ test "BasicLogger log emission through pipeline" {
 
     // Get logger
     const scope = api.InstrumentationScope{ .name = "test.logger", .version = "1.0.0" };
-    var logger = try provider.getLoggerWithScope(scope);
+    var logger = provider.getLoggerWithScope(scope);
 
     // Emit logs of different severities
     const ctx = &[_]api.ContextKeyValue{};
@@ -179,7 +179,7 @@ test "BasicLogger severity filtering" {
     try provider.registerProcessor(processor.logProcessor());
 
     const scope = api.InstrumentationScope{ .name = "test.logger", .version = "1.0.0" };
-    var logger = try provider.getLoggerWithScope(scope);
+    var logger = provider.getLoggerWithScope(scope);
     const ctx = &[_]api.ContextKeyValue{};
 
     // Test enabled() method - with processor registered, not all severities should be enabled
@@ -200,7 +200,7 @@ test "BasicLogger processor enabled() integration" {
     defer provider.deinit();
 
     const scope = api.InstrumentationScope{ .name = "test.logger", .version = "1.0.0" };
-    var logger = try provider.getLoggerWithScope(scope);
+    var logger = provider.getLoggerWithScope(scope);
     const ctx = &[_]api.ContextKeyValue{};
 
     // Test 1: No processors - should return false per spec
@@ -245,7 +245,7 @@ test "BasicLogger shutdown behavior" {
     try provider.registerProcessor(processor.logProcessor());
 
     const scope = api.InstrumentationScope{ .name = "test.logger", .version = "1.0.0" };
-    var logger = try provider.getLoggerWithScope(scope);
+    var logger = provider.getLoggerWithScope(scope);
     const ctx = &[_]api.ContextKeyValue{};
 
     // Emit log before shutdown
@@ -305,7 +305,7 @@ test "BasicLogger with attributes and timestamps" {
     try provider.registerProcessor(processor.logProcessor());
 
     const scope = api.InstrumentationScope{ .name = "test.logger", .version = "1.0.0" };
-    var logger = try provider.getLoggerWithScope(scope);
+    var logger = provider.getLoggerWithScope(scope);
     const ctx = &[_]api.ContextKeyValue{};
 
     // Create attributes

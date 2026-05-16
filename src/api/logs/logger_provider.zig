@@ -23,7 +23,7 @@ pub const LoggerProvider = union(enum) {
     ///
     /// The provider must make an internal copy of the provided instrumentation scope
     /// and will not take ownership of it.
-    pub inline fn getLoggerWithScope(self: *const LoggerProvider, scope: InstrumentationScope) !Logger {
+    pub inline fn getLoggerWithScope(self: *const LoggerProvider, scope: InstrumentationScope) Logger {
         return switch (self.*) {
             .noop => Logger{ .noop = {} },
             .bridge => |*bridge| bridge.getLoggerWithScopeFn(bridge.provider_ptr, scope),
@@ -34,14 +34,14 @@ pub const LoggerProvider = union(enum) {
 /// Bridge structure that holds SDK provider pointer and vtable
 pub const LoggerProviderBridge = struct {
     provider_ptr: *anyopaque,
-    getLoggerWithScopeFn: *const fn (provider_ptr: *anyopaque, scope: InstrumentationScope) anyerror!Logger,
+    getLoggerWithScopeFn: *const fn (provider_ptr: *anyopaque, scope: InstrumentationScope) Logger,
 
     pub fn init(ptr: anytype) LoggerProviderBridge {
         const T = @TypeOf(ptr);
         const ptr_info = @typeInfo(T);
 
         const VTable = struct {
-            pub fn getLoggerWithScope(pointer: *anyopaque, scope: InstrumentationScope) anyerror!Logger {
+            pub fn getLoggerWithScope(pointer: *anyopaque, scope: InstrumentationScope) Logger {
                 const self: T = @ptrCast(@alignCast(pointer));
                 return ptr_info.pointer.child.getLoggerWithScope(self, scope);
             }

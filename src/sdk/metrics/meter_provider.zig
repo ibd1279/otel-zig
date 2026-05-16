@@ -139,8 +139,22 @@ pub const MeterProvider = struct {
 
     /// Interface defined method to get a meter.
     ///
+    /// Returns a noop meter and reports to the OTel error handler if allocation fails.
     /// The provided scope is copied internally.
-    pub fn getMeterWithScope(self: *MeterProvider, scope: api.InstrumentationScope) !api.metrics.Meter {
+    pub fn getMeterWithScope(self: *MeterProvider, scope: api.InstrumentationScope) api.metrics.Meter {
+        return self.getMeterWithScopeInternal(scope) catch |err| {
+            api.common.reportResourceExhaustedErrorWithSource(
+                .meter,
+                "getMeterWithScope",
+                "Failed to allocate meter for instrumentation scope; returning noop",
+                null,
+                err,
+            );
+            return api.metrics.Meter{ .noop = scope };
+        };
+    }
+
+    fn getMeterWithScopeInternal(self: *MeterProvider, scope: api.InstrumentationScope) !api.metrics.Meter {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
 

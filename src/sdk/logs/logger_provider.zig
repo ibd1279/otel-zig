@@ -116,8 +116,23 @@ pub const LoggerProvider = struct {
         return .success;
     }
 
-    /// Interface definde method to get a logger.
-    pub fn getLoggerWithScope(self: *LoggerProvider, scope: api.InstrumentationScope) !api.logs.Logger {
+    /// Interface defined method to get a logger.
+    ///
+    /// Returns a noop logger and reports to the OTel error handler if allocation fails.
+    pub fn getLoggerWithScope(self: *LoggerProvider, scope: api.InstrumentationScope) api.logs.Logger {
+        return self.getLoggerWithScopeInternal(scope) catch |err| {
+            api.common.reportResourceExhaustedErrorWithSource(
+                .logger,
+                "getLoggerWithScope",
+                "Failed to allocate logger for instrumentation scope; returning noop",
+                null,
+                err,
+            );
+            return api.logs.Logger{ .noop = {} };
+        };
+    }
+
+    fn getLoggerWithScopeInternal(self: *LoggerProvider, scope: api.InstrumentationScope) !api.logs.Logger {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
 
