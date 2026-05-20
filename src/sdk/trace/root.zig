@@ -46,6 +46,7 @@ pub const BridgeSpanProcessor = @import("processor.zig").BridgeSpanProcessor;
 // Exporter types
 pub const SpanExporter = @import("exporter.zig").SpanExporter;
 pub const BridgeSpanExporter = @import("exporter.zig").BridgeSpanExporter;
+pub const MockSpanExporter = @import("exporter.zig").MockSpanExporter;
 
 // Samplers
 pub const samplers = @import("samplers/root.zig");

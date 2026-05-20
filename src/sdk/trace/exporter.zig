@@ -149,6 +149,7 @@ pub const MockSpanExporter = struct {
 
     pub fn deinit(self: *MockSpanExporter) void {
         if (self.deinit_notify) |ptr| ptr.* = true;
+        for (self.exported_spans.items) |span| span.deinitOwned(self.allocator);
         self.exported_spans.deinit(self.allocator);
     }
 
@@ -159,8 +160,12 @@ pub const MockSpanExporter = struct {
     pub fn exportSpans(self: *MockSpanExporter, spans: []const SpanData, resource: Resource) ExportResult {
         _ = resource;
         for (spans) |span| {
-            // Store reference to span since the exporter needs to own the data
-            self.exported_spans.append(self.allocator, span) catch return .failure;
+            // Deep-copy so attributes remain valid after the source RecordingSpan is freed.
+            const owned = SpanData.initOwned(self.allocator, span) catch return .failure;
+            self.exported_spans.append(self.allocator, owned) catch {
+                owned.deinitOwned(self.allocator);
+                return .failure;
+            };
         }
         return self.export_result;
     }
@@ -181,6 +186,7 @@ pub const MockSpanExporter = struct {
 
     // Test helpers
     pub fn clearSpans(self: *MockSpanExporter) void {
+        for (self.exported_spans.items) |span| span.deinitOwned(self.allocator);
         self.exported_spans.clearRetainingCapacity();
     }
 
