@@ -126,6 +126,27 @@ pub const INPUT_MESSAGES = "gen_ai.input.messages";
 pub const OUTPUT_MESSAGES = "gen_ai.output.messages";
 pub const SYSTEM_INSTRUCTIONS = "gen_ai.system_instructions";
 
+// Event names
+//
+// These are the `event_name` values for log-based events emitted via
+// `Logger.emitEvent`. Log-based events are the OTel-preferred mechanism for
+// capturing GenAI content (inputs, outputs, instructions) — `gen_ai.prompt`
+// and `gen_ai.completion` span attributes are deprecated in favour of this
+// approach. See: https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-events/
+pub const Events = struct {
+    /// Captures the full details of a GenAI inference operation: chat history,
+    /// system instructions, tool definitions, and output messages.
+    /// Attributes: gen_ai.INPUT_MESSAGES, gen_ai.OUTPUT_MESSAGES,
+    ///             gen_ai.SYSTEM_INSTRUCTIONS, gen_ai.TOOL_DEFINITIONS (all opt-in).
+    pub const CLIENT_INFERENCE_OPERATION_DETAILS = "gen_ai.client.inference.operation.details";
+
+    /// Captures the result of evaluating GenAI output for quality or accuracy.
+    /// Should be parented to the GenAI operation span being evaluated.
+    /// Attributes: gen_ai.EVALUATION_NAME, gen_ai.EVALUATION_SCORE_VALUE,
+    ///             gen_ai.EVALUATION_SCORE_LABEL, gen_ai.EVALUATION_EXPLANATION.
+    pub const EVALUATION_RESULT = "gen_ai.evaluation.result";
+};
+
 // Evaluation events
 
 pub const EVALUATION_NAME = "gen_ai.evaluation.name";

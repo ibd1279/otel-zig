@@ -58,7 +58,6 @@ pub const SpanData = struct {
         errdefer allocator.free(events);
         for (0..unowned.events.len) |h| {
             errdefer for (0..h) |i| {
-                if (h == i) break;
                 allocator.free(events[i].name);
                 api.AttributeKeyValue.deinitOwnedSlice(allocator, events[i].attributes);
             };
@@ -84,7 +83,6 @@ pub const SpanData = struct {
         errdefer allocator.free(links);
         for (0..unowned.links.len) |h| {
             errdefer for (0..h) |i| {
-                if (h == i) break;
                 api.AttributeKeyValue.deinitOwnedSlice(allocator, links[i].attributes);
             };
 
@@ -174,7 +172,14 @@ pub const RecordingSpan = struct {
         self.tracer.provider.allocator.free(self.name);
         if (self.status.description) |desc| self.tracer.provider.allocator.free(desc);
         api.AttributeKeyValue.deinitOwnedSlice(self.tracer.provider.allocator, self.attributes);
+        for (self.events.items) |event| {
+            self.tracer.provider.allocator.free(event.name);
+            api.AttributeKeyValue.deinitOwnedSlice(self.tracer.provider.allocator, event.attributes);
+        }
         self.events.deinit(self.tracer.provider.allocator);
+        for (self.links.items) |link| {
+            api.AttributeKeyValue.deinitOwnedSlice(self.tracer.provider.allocator, link.attributes);
+        }
         self.links.deinit(self.tracer.provider.allocator);
         self.tracer.provider.allocator.destroy(self);
     }
@@ -217,22 +222,39 @@ pub const RecordingSpan = struct {
     }
 
     pub fn addEvent(self: *RecordingSpan, event: api.trace.Span.Event) void {
-        // TODO: this should deep copy the event for memeory safety.
-        var e = event;
-        if (e.timestamp == null) {
-            e.timestamp = std.Io.Clock.real.now(self.tracer.provider.io);
-        }
-        self.events.append(self.tracer.provider.allocator, e) catch {};
+        const ts = event.timestamp orelse std.Io.Clock.real.now(self.tracer.provider.io);
+        const owned_name = self.tracer.provider.allocator.dupe(u8, event.name) catch return;
+        const owned_attrs = api.AttributeKeyValue.initOwnedSlice(
+            self.tracer.provider.allocator,
+            event.attributes,
+        ) catch {
+            self.tracer.provider.allocator.free(owned_name);
+            return;
+        };
+        self.events.append(self.tracer.provider.allocator, .{
+            .name = owned_name,
+            .timestamp = ts,
+            .attributes = owned_attrs,
+        }) catch {
+            self.tracer.provider.allocator.free(owned_name);
+            api.AttributeKeyValue.deinitOwnedSlice(self.tracer.provider.allocator, owned_attrs);
+        };
     }
 
     pub fn addLink(self: *RecordingSpan, link: api.trace.Span.Link) anyerror!void {
-        // TODO: this should deep copy the link for memory safety.
-        self.links.append(self.tracer.provider.allocator, link) catch {};
+        const owned_attrs = try api.AttributeKeyValue.initOwnedSlice(
+            self.tracer.provider.allocator,
+            link.attributes,
+        );
+        errdefer api.AttributeKeyValue.deinitOwnedSlice(self.tracer.provider.allocator, owned_attrs);
+        try self.links.append(self.tracer.provider.allocator, .{
+            .span_context = link.span_context,
+            .attributes = owned_attrs,
+        });
     }
 
     pub fn addLinks(self: *RecordingSpan, links: []const api.trace.Span.Link) anyerror!void {
-        // TODO: this should deep copy the links for memory safety.
-        self.links.appendSlice(self.tracer.provider.allocator, links) catch {};
+        for (links) |link| try self.addLink(link);
     }
 
     pub fn end(self: *RecordingSpan, bridge: api.trace.Span.Bridge, options: ?api.trace.Span.EndOptions) void {
@@ -259,7 +281,7 @@ pub const RecordingSpan = struct {
 
     pub fn recordException(self: *RecordingSpan, exception: anyerror, attributes: ?[]const AttributeKeyValue, timestamp: ?std.Io.Timestamp) anyerror!void {
         // TODO: these names should come from semconv, if they are defined there.
-        const convention_attributes = &[_]AttributeKeyValue{ .{
+        const convention_attributes = [_]AttributeKeyValue{ .{
             .key = "exception.type",
             .value = AttributeValue{ .string = @errorName(exception) },
         }, .{
@@ -267,19 +289,31 @@ pub const RecordingSpan = struct {
             .value = AttributeValue{ .string = @errorName(exception) },
         } };
 
+        const default_ts = std.Io.Clock.real.now(self.tracer.provider.io);
+
         const attrs_builder = api.AttributeBuilder.init(self.tracer.provider.allocator)
             .addMany(attributes orelse &.{})
-            .addMany(convention_attributes);
+            .addMany(&convention_attributes);
         defer attrs_builder.deinit();
 
-        const exception_attrs: ?[]api.AttributeKeyValue = attrs_builder.build() catch null;
-        if (exception_attrs) |attrs| self.tracer.provider.allocator.free(attrs);
-
-        const default_ts = std.Io.Clock.real.now(self.tracer.provider.io);
-        self.addEvent(.{
-            .name = "exception",
-            .timestamp = timestamp orelse default_ts,
-            .attributes = exception_attrs orelse convention_attributes,
-        });
+        // build() produces a shallow-copied, deduped slice whose strings still
+        // point to the caller's memory and convention_attributes (both alive for
+        // this call). addEvent deep-copies everything before returning, so we
+        // can free the intermediate slice immediately after.
+        if (attrs_builder.build()) |merged| {
+            defer self.tracer.provider.allocator.free(merged);
+            self.addEvent(.{
+                .name = "exception",
+                .timestamp = timestamp orelse default_ts,
+                .attributes = merged,
+            });
+        } else |_| {
+            // OOM: record with convention attributes only; caller extras are dropped.
+            self.addEvent(.{
+                .name = "exception",
+                .timestamp = timestamp orelse default_ts,
+                .attributes = &convention_attributes,
+            });
+        }
     }
 };

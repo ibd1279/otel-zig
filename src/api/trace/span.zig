@@ -88,6 +88,23 @@ pub const Span = union(enum) {
     }
 
     /// Add an event to the span.
+    ///
+    /// Records a timestamped annotation attached directly to this span's lifecycle.
+    /// Span events are the right tool for lightweight, span-local moments
+    /// (e.g. "cache miss", "retry attempt 2", "circuit breaker opened").
+    ///
+    /// **Use log-based events for structured or semantic content.**
+    /// OpenTelemetry semantic conventions that capture content — in particular
+    /// all GenAI conventions (`gen_ai.client.inference.operation.details`, etc.) —
+    /// are defined as log-based events, not span events. Log-based events are
+    /// richer (independent severity, body, filtering, and export pipeline) and
+    /// are correlated to the active span automatically via the context.
+    ///
+    /// To emit a correlated log event, pass the same `ctx` slice that contains
+    /// the active span; the SDK extracts trace/span IDs from it automatically:
+    /// ```zig
+    /// logger.emitEvent(ctx, event_name, .info, body, attributes);
+    /// ```
     pub inline fn addEvent(self: *Span, event: Event) !void {
         // Because attribute and event management requires memory management, delegating to the bridge.
         switch (self.*) {

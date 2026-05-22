@@ -112,6 +112,53 @@ pub const Logger = union(enum) {
         );
     }
 
+    /// Emit a named log event correlated to the active span in `ctx`.
+    ///
+    /// Use this for structured semantic events that belong to a trace — in
+    /// particular all GenAI content events such as
+    /// `gen_ai.client.inference.operation.details`. Log-based events are richer
+    /// than span events: they carry an independent export pipeline, severity,
+    /// and attributes. Span correlation (trace_id, span_id, flags) is extracted
+    /// automatically from `ctx` by the SDK; no manual ID passing is required.
+    ///
+    /// Per the OTel events spec, events SHOULD specify a severity number.
+    /// The GenAI semconv does not prescribe a specific level for content-capture
+    /// events; `.info` is a common choice but is not mandated. `body` SHOULD
+    /// only carry a human-readable display string; structured content belongs
+    /// in `attributes`.
+    ///
+    /// ```zig
+    /// logger.emitEvent(
+    ///     ctx,
+    ///     semconv.gen_ai.Events.CLIENT_INFERENCE_OPERATION_DETAILS,
+    ///     .info,
+    ///     null,       // body: optional display string
+    ///     attributes, // gen_ai.INPUT_MESSAGES, gen_ai.OUTPUT_MESSAGES, etc.
+    /// );
+    /// ```
+    pub inline fn emitEvent(
+        self: *Logger,
+        ctx: []const api.ContextKeyValue,
+        event_name: []const u8,
+        severity: ?api.logs.Severity,
+        body: ?api.AttributeValue,
+        attributes: ?[]const api.AttributeKeyValue,
+    ) void {
+        self.emitLogRecord(
+            ctx,
+            severity,
+            body,
+            attributes,
+            null, // timestamp — SDK fills in using io clock
+            null, // observed_timestamp — SDK fills in using io clock
+            event_name,
+            null, // severity_text
+            null, // trace_id — SDK extracts from ctx automatically
+            null, // span_id  — SDK extracts from ctx automatically
+            null, // flags    — SDK extracts from ctx automatically
+        );
+    }
+
     // Convenience methods for different severity levels
 
     /// Log a trace message

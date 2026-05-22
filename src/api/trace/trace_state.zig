@@ -106,8 +106,9 @@ pub const StateKeyValue = struct {
     pub fn initOwnedSlice(allocator: std.mem.Allocator, unowned: []StateKeyValue) ![]StateKeyValue {
         var owned = try allocator.alloc(StateKeyValue, unowned.len);
         errdefer allocator.free(owned);
-        for (0..unowned.len) |h| {
-            errdefer if (h > 0) for (0..h - 1) |i| owned[i].deinitOwned(allocator);
+        var h: usize = 0;
+        errdefer for (0..h) |i| owned[i].deinitOwned(allocator);
+        while (h < unowned.len) : (h += 1) {
             owned[h] = try initOwned(allocator, unowned[h]);
         }
         return owned;

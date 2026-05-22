@@ -556,7 +556,10 @@ pub const AttributeKeyValue = struct {
     /// Deep copy a slice of AttributeKeyValue.
     pub fn initOwnedSlice(allocator: std.mem.Allocator, unowned: []const AttributeKeyValue) ![]AttributeKeyValue {
         var owned = try allocator.alloc(AttributeKeyValue, unowned.len);
-        for (0..unowned.len) |h| {
+        errdefer allocator.free(owned);
+        var h: usize = 0;
+        errdefer for (0..h) |i| owned[i].deinitOwned(allocator);
+        while (h < unowned.len) : (h += 1) {
             owned[h] = try initOwned(allocator, unowned[h].key, unowned[h].value);
         }
         return owned;

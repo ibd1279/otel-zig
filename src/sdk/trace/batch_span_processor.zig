@@ -114,9 +114,7 @@ pub const BatchSpanProcessor = struct {
 
         self.mutex.lockUncancelable(self.io);
         const old_exporter = self.exporter;
-        if (exporter) |exp| {
-            self.exporter = exp;
-        }
+        self.exporter = exporter;
         self.mutex.unlock(self.io);
 
         if (old_exporter) |old| {
