@@ -175,21 +175,21 @@ pub const BatchSpanProcessor = struct {
 
     /// Called when a span ends - adds span to batch queue
     pub fn onEnd(self: *BatchSpanProcessor, span: sdk.trace.SpanData, resource: sdk.Resource) void {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-
+        // Fast pre-check without the lock; a racing shutdown is re-checked below.
         if (self.is_shutdown.load(.acquire)) {
             return;
         }
 
-        // Drop newest if queue is full
-        if (self.span_queue.items.len >= self.max_queue_size) {
-            return;
-        }
-
-        // Clone span for queuing (original will be deinitialized by caller)
+        // Clone the span BEFORE taking the lock. initOwned is the expensive part
+        // of onEnd: a deep heap copy of the span name and every attribute (which
+        // for DB/HTTP instrumentation includes large SQL/URL strings). Cloning
+        // under the mutex serializes every concurrent onEnd — and with many
+        // request threads on few cores, a thread preempted mid-copy stalls all
+        // the others. That lock convoy turns a flood of sub-millisecond spans
+        // into multi-second tail latency (observed downstream: 14 spans/request
+        // × 24 concurrent requests → seconds of inter-span gaps). Cloning first
+        // keeps the critical section to a capacity check plus a pointer append.
         const cloned_span = sdk.trace.SpanData.initOwned(self.allocator, span) catch |err| {
-            // Log error instead of silent drop
             error_handler.reportError(.{
                 .component = .processor,
                 .operation = "span_clone",
@@ -201,10 +201,19 @@ pub const BatchSpanProcessor = struct {
             return;
         };
 
-        // Add cloned span to queue
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+
+        // Re-check under the lock: shutdown may have raced us, and the queue may
+        // have filled while we were cloning. Free the clone in either case so it
+        // is not leaked (the caller still owns and deinits the original `span`).
+        if (self.is_shutdown.load(.acquire) or self.span_queue.items.len >= self.max_queue_size) {
+            cloned_span.deinitOwned(self.allocator);
+            return;
+        }
+
         self.span_queue.append(self.allocator, .{ .resource = resource, .data = cloned_span }) catch |err| {
             cloned_span.deinitOwned(self.allocator);
-            // Log queue overflow
             error_handler.reportError(.{
                 .component = .processor,
                 .operation = "queue_append",
@@ -663,4 +672,74 @@ test "BatchSpanProcessor - setExporter drains and frees old exporter" {
 
     try testing.expectEqual(otel_api.common.FlushResult.success, processor.forceFlush(null));
     try testing.expectEqual(@as(usize, 1), mock_exporter_2.spanCount());
+}
+
+test "BatchSpanProcessor - concurrent onEnd from many threads queues every span" {
+    // Regression for the onEnd lock convoy: many threads end spans at once, so
+    // onEnd's clone-then-lock path runs fully concurrently. Asserts every span
+    // is queued exactly once (no lost or double-counted spans) and — via the
+    // testing allocator — that no clone leaks on any path.
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var mock_error_handler = otel_api.common.MockErrorHandler.init(allocator);
+    defer mock_error_handler.deinit();
+    otel_api.common.setMockErrorHandler(&mock_error_handler);
+    defer otel_api.common.clearMockErrorHandler();
+
+    const mock_exporter = try allocator.create(MockSpanExporter);
+    mock_exporter.* = MockSpanExporter.init(allocator);
+
+    const processor = try allocator.create(BatchSpanProcessor);
+    // High interval + init() without start() means the export thread never
+    // drains; the queue must hold every span. Queue sized well above the total
+    // so none are dropped.
+    processor.* = BatchSpanProcessor.init(
+        std.testing.io,
+        allocator,
+        mock_exporter.spanExporter(),
+        .{ .export_interval_ms = 1_000_000, .max_queue_size = 4096 },
+    );
+    // Deliberately not calling processor.start(): no background drain.
+
+    const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
+    defer provider.deinit();
+    try provider.registerProcessor(processor.spanProcessor());
+
+    const TracerProvider = @import("tracer_provider.zig").TracerProvider;
+    const N_THREADS = 8;
+    const SPANS_PER = 25;
+
+    const Worker = struct {
+        fn run(prov: *TracerProvider, alloc: std.mem.Allocator, ok: *std.atomic.Value(u32)) void {
+            const tracer = prov.getTracerWithScope(.empty);
+            const sc = otel_api.trace.Span.Context{
+                .trace_id = otel_api.common.TraceId{ .bytes = [_]u8{7} ** 16 },
+                .span_id = otel_api.common.SpanId{ .bytes = [_]u8{7} ** 8 },
+                .trace_flags = 0,
+                .trace_state = null,
+                .is_remote = false,
+            };
+            var i: usize = 0;
+            while (i < SPANS_PER) : (i += 1) {
+                const ctx = otel_api.trace.trace_context.withActiveSpanContext(alloc, &.{}, sc) catch return;
+                defer otel_api.ContextKeyValue.deinitOwnedSlice(alloc, ctx);
+                var span = tracer.startSpan("concurrent-span", .{}, ctx);
+                span.end(null); // calls onEnd on this thread
+                span.deinit();
+            }
+            _ = ok.fetchAdd(1, .monotonic);
+        }
+    };
+
+    var ok = std.atomic.Value(u32).init(0);
+    var threads: [N_THREADS]std.Thread = undefined;
+    for (&threads) |*t| t.* = try std.Thread.spawn(.{}, Worker.run, .{ &provider, allocator, &ok });
+    for (threads) |t| t.join();
+
+    try testing.expectEqual(@as(u32, N_THREADS), ok.load(.monotonic));
+    processor.mutex.lockUncancelable(std.testing.io);
+    defer processor.mutex.unlock(std.testing.io);
+    try testing.expectEqual(@as(usize, N_THREADS * SPANS_PER), processor.span_queue.items.len);
 }
