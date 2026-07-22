@@ -32,11 +32,14 @@ const processor_zig = @import("processor.zig");
 const SpanProcessor = processor_zig.SpanProcessor;
 const BridgeSpanProcessor = processor_zig.BridgeSpanProcessor;
 
+const QueuedSpan = struct { resource: sdk.Resource, data: sdk.trace.SpanData };
+
 /// Configuration for BatchSpanProcessor PipelineStep
 pub const BatchConfig = struct {
     io: ?std.Io = null,
     export_interval_ms: ?u32 = null,
     max_queue_size: ?usize = null,
+    max_export_batch_size: ?usize = null,
 };
 
 /// Batch span processor that exports spans at regular intervals
@@ -73,7 +76,8 @@ pub const BatchSpanProcessor = struct {
     shutdown_signal: std.Io.Event,
     export_interval_ms: u32,
     max_queue_size: usize,
-    span_queue: std.ArrayList(struct { resource: sdk.Resource, data: sdk.trace.SpanData }),
+    max_export_batch_size: usize,
+    span_queue: std.ArrayList(QueuedSpan),
 
     /// Initialize a new batch span processor
     /// export_interval_ms: How often to export spans (default: 5000ms = 5s)
@@ -102,6 +106,7 @@ pub const BatchSpanProcessor = struct {
             .shutdown_signal = .unset,
             .export_interval_ms = config.export_interval_ms orelse 5000,
             .max_queue_size = config.max_queue_size orelse 2048,
+            .max_export_batch_size = @max(1, @min(config.max_export_batch_size orelse 512, config.max_queue_size orelse 2048)),
             .span_queue = .empty,
         };
     }
@@ -224,6 +229,11 @@ pub const BatchSpanProcessor = struct {
             });
             return;
         };
+        // Wake the background thread early: a threshold-sized batch has queued
+        // up, so it should export before the next interval tick. Reuses the
+        // generic wake event (also used for shutdown) — the thread re-checks
+        // is_shutdown after every wait.
+        if (self.span_queue.items.len >= self.max_export_batch_size) self.shutdown_signal.set(self.io);
     }
 
     /// Force export all queued spans immediately
@@ -299,16 +309,7 @@ pub const BatchSpanProcessor = struct {
         // Release mutex during export — HTTP calls can take seconds
         self.mutex.unlock(self.io);
 
-        if (self.exporter) |exporter| {
-            for (spans_to_export) |item| {
-                _ = exporter.exportSpans(&.{item.data}, item.resource);
-            }
-        }
-
-        for (spans_to_export) |span| {
-            span.data.deinitOwned(self.allocator);
-        }
-        self.allocator.free(spans_to_export);
+        _ = self.exportOwned(spans_to_export);
 
         // Re-acquire mutex before returning
         self.mutex.lockUncancelable(self.io);
@@ -319,6 +320,26 @@ pub const BatchSpanProcessor = struct {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
         self.exportBatchUnlocked();
+    }
+
+    fn exportOwned(self: *BatchSpanProcessor, items: []QueuedSpan) ExportResult {
+        defer {
+            for (items) |item| item.data.deinitOwned(self.allocator);
+            self.allocator.free(items);
+        }
+        const exporter = self.exporter orelse return .success;
+        const batch = self.allocator.alloc(sdk.trace.SpanData, @min(items.len, self.max_export_batch_size)) catch return .failure;
+        defer self.allocator.free(batch);
+        var result: ExportResult = .success;
+        var offset: usize = 0;
+        while (offset < items.len) {
+            const count = @min(batch.len, items.len - offset);
+            for (items[offset .. offset + count], 0..) |item, i| batch[i] = item.data;
+            const current = exporter.exportSpans(batch[0..count], items[offset].resource);
+            if (!current.isSuccess()) result = current;
+            offset += count;
+        }
+        return result;
     }
 
     /// Background thread function that periodically exports spans
@@ -442,6 +463,88 @@ test "BatchSpanProcessor - span queuing and export" {
     processor.mutex.lockUncancelable(processor.io);
     try testing.expectEqual(@as(usize, 0), processor.span_queue.items.len);
     processor.mutex.unlock(processor.io);
+}
+
+test "BatchSpanProcessor exports bounded batches" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const mock_exporter = try allocator.create(MockSpanExporter);
+    mock_exporter.* = MockSpanExporter.init(allocator);
+    const processor = try allocator.create(BatchSpanProcessor);
+    processor.* = BatchSpanProcessor.init(std.testing.io, allocator, mock_exporter.spanExporter(), .{
+        .export_interval_ms = 1_000_000,
+        .max_queue_size = 10,
+        .max_export_batch_size = 2,
+    });
+
+    const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
+    defer provider.deinit();
+    try provider.registerProcessor(processor.spanProcessor());
+    const tracer = provider.getTracerWithScope(.empty);
+
+    for (0..5) |_| {
+        var span = tracer.startSpan("batched-span", .{}, &.{});
+        span.end(null);
+        span.deinit();
+    }
+    try testing.expectEqual(otel_api.common.FlushResult.success, processor.forceFlush(null));
+    try testing.expectEqual(@as(usize, 5), mock_exporter.spanCount());
+    try testing.expectEqual(@as(usize, 3), mock_exporter.exportCallCount());
+}
+
+test "BatchSpanProcessor threshold wakes exporter before schedule" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const mock_exporter = try allocator.create(MockSpanExporter);
+    mock_exporter.* = MockSpanExporter.init(allocator);
+    const processor = try allocator.create(BatchSpanProcessor);
+    processor.* = BatchSpanProcessor.init(std.testing.io, allocator, mock_exporter.spanExporter(), .{
+        .export_interval_ms = 60_000,
+        .max_queue_size = 10,
+        .max_export_batch_size = 2,
+    });
+
+    const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
+    defer provider.deinit();
+    try provider.registerProcessor(processor.spanProcessor());
+    try processor.start();
+    const tracer = provider.getTracerWithScope(.empty);
+
+    for (0..2) |_| {
+        var span = tracer.startSpan("threshold-span", .{}, &.{});
+        span.end(null);
+        span.deinit();
+    }
+    const deadline = std.Io.Timestamp.now(std.testing.io, .real).nanoseconds + 500 * std.time.ns_per_ms;
+    while (mock_exporter.exportCallCount() == 0 and std.Io.Timestamp.now(std.testing.io, .real).nanoseconds < deadline) {
+        std.testing.io.sleep(.{ .nanoseconds = std.time.ns_per_ms }, .real) catch {};
+    }
+    try testing.expect(mock_exporter.exportCallCount() > 0);
+    try testing.expectEqual(otel_api.common.FlushResult.success, processor.forceFlush(1000));
+    try testing.expectEqual(@as(usize, 2), mock_exporter.spanCount());
+}
+
+test "BatchSpanProcessor force flush timeout bounds an in-progress export wait" {
+    const testing = std.testing;
+    const processor = try testing.allocator.create(BatchSpanProcessor);
+    processor.* = BatchSpanProcessor.init(std.testing.io, testing.allocator, null, .{});
+    defer {
+        processor.export_in_progress.store(false, .release);
+        processor.export_complete.broadcast(std.testing.io);
+        processor.deinit();
+        processor.destroy();
+    }
+
+    processor.export_in_progress.store(true, .release);
+    const started = std.Io.Timestamp.now(std.testing.io, .awake).nanoseconds;
+    try testing.expectEqual(otel_api.common.FlushResult.timeout, processor.forceFlush(30));
+    const elapsed = std.Io.Timestamp.now(std.testing.io, .awake).nanoseconds - started;
+    try testing.expect(elapsed >= 20 * std.time.ns_per_ms);
+    try testing.expect(elapsed < 200 * std.time.ns_per_ms);
 }
 
 test "BatchSpanProcessor - queue overflow drops newest" {
