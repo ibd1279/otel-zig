@@ -29,6 +29,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/sdk/root.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     otel_sdk_mod.addImport("otel-api", otel_api_mod);
 
@@ -36,6 +37,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/sdk/root.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
         .imports = &.{
             .{ .name = "otel-api", .module = otel_api_mod },
         },
@@ -386,6 +388,8 @@ pub fn build(b: *std.Build) void {
     const run_simple_trace_otlp = b.addRunArtifact(simple_trace_otlp_example);
     const simple_trace_otlp_step = b.step("example-simple-trace-otlp", "Run simple trace OTLP example");
     simple_trace_otlp_step.dependOn(&run_simple_trace_otlp.step);
+    const check_trace_otlp_step = b.step("check-trace-otlp", "Compile the OTLP trace pipeline without running it");
+    check_trace_otlp_step.dependOn(&simple_trace_otlp_example.step);
 
     // Error Handling Demo Example
     const error_handling_demo_example = b.addExecutable(.{

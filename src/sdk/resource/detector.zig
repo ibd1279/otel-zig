@@ -87,40 +87,25 @@ pub const ProcessDetector = struct {
 
         var attrs = AttributeBuilder.init(arena.allocator());
 
-        // Get executable path
+        // Process IDs are available from libc on the Unix targets supported
+        // by the SDK. Keep unsupported targets useful by omitting this one
+        // optional resource attribute instead of failing compilation.
         switch (builtin.os.tag) {
-            .macos => {
-                // Detect process attributes
-                const pid = std.c.getpid();
-                attrs = attrs.add(.{ .key = "process.pid", .value = .{ .int = @intCast(pid) } });
+            .linux, .macos, .freebsd, .openbsd, .netbsd, .dragonfly => attrs = attrs.add(.{ .key = "process.pid", .value = .{ .int = @intCast(std.c.getpid()) } }),
+            else => {},
+        }
 
-                // Let the arena allocator clean up the memory.
-                var size: u32 = std.Io.Dir.max_path_bytes;
-                const buf = try arena.allocator().allocSentinel(u8, size, 0);
-
-                if (std.c._NSGetExecutablePath(buf.ptr, &size) == 0) {
-                    const path = std.mem.sliceTo(buf, 0);
-                    const basename = std.fs.path.basename(path);
-                    attrs = attrs.add(.{ .key = "process.executable.path", .value = .{ .string = path } });
-                    attrs = attrs.add(.{ .key = "process.executable.name", .value = .{ .string = basename } });
-                }
-            },
-            .freebsd => {
-                // Detect process attributes
-                const pid = std.c.getpid();
-                attrs = attrs.add(.{ .key = "process.pid", .value = .{ .int = @intCast(pid) } });
-
-                // Try to read executable path from procfs symlink (procfs must be mounted)
-                var exe_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-                if (std.Io.Dir.readLinkAbsolute(io, "/proc/curproc/file", &exe_buf)) |len| {
-                    const exe_path = exe_buf[0..len];
-                    const exe_path_owned = try arena.allocator().dupe(u8, exe_path);
-                    const basename = std.fs.path.basename(exe_path_owned);
-                    attrs = attrs.add(.{ .key = "process.executable.path", .value = .{ .string = exe_path_owned } });
-                    attrs = attrs.add(.{ .key = "process.executable.name", .value = .{ .string = basename } });
-                } else |_| {}
-            },
-            else => @compileError("unsupported OS."),
+        // Zig's executablePath implementation already handles Linux's
+        // /proc/self/exe, macOS's _NSGetExecutablePath, and the equivalent on
+        // other supported platforms. Resource detection is best-effort, so a
+        // restricted procfs or sandbox simply omits these attributes.
+        var executable_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        if (std.process.executablePath(io, &executable_buffer)) |path_len| {
+            const path = executable_buffer[0..path_len];
+            attrs = attrs.add(.{ .key = "process.executable.path", .value = .{ .string = path } });
+            attrs = attrs.add(.{ .key = "process.executable.name", .value = .{ .string = std.fs.path.basename(path) } });
+        } else |_| {
+            // Optional resource metadata must not prevent tracing startup.
         }
 
         // Command line args are now obtained from main(init: std.process.Init) in 0.16.
@@ -269,4 +254,20 @@ test "HostDetector" {
     try testing.expect(resource.attributes.len >= 2);
     try testing.expectEqualStrings("host.type", resource.attributes[0].key);
     try testing.expectEqualStrings("host.arch", resource.attributes[1].key);
+}
+
+test "ProcessDetector reports the running executable without host-specific code" {
+    const testing = std.testing;
+    var detector = ProcessDetector.init();
+    var resource = try detector.detect(testing.allocator, std.testing.io);
+    defer resource.deinitOwned(testing.allocator);
+
+    var saw_path = false;
+    var saw_name = false;
+    for (resource.attributes) |attribute| {
+        if (std.mem.eql(u8, attribute.key, "process.executable.path")) saw_path = attribute.value.string.len > 0;
+        if (std.mem.eql(u8, attribute.key, "process.executable.name")) saw_name = attribute.value.string.len > 0;
+    }
+    try testing.expect(saw_path);
+    try testing.expect(saw_name);
 }
