@@ -9,13 +9,7 @@ pub fn build(b: *std.Build) void {
     // ========================================================================
     // Contains only interfaces, types, and noop implementations
     // This is what applications import for stable APIs
-    const otel_api_mod = b.createModule(.{
-        .root_source_file = b.path("src/api/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    _ = b.addModule("otel-api", .{
+    const otel_api_mod = b.addModule("otel-api", .{
         .root_source_file = b.path("src/api/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -25,23 +19,13 @@ pub fn build(b: *std.Build) void {
     // OpenTelemetry SDK Core Module
     // ========================================================================
     // Contains basic SDK implementations (loggers, providers, processors)
-    const otel_sdk_mod = b.createModule(.{
+    const otel_sdk_mod = b.addModule("otel-sdk", .{
         .root_source_file = b.path("src/sdk/root.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
     otel_sdk_mod.addImport("otel-api", otel_api_mod);
-
-    _ = b.addModule("otel-sdk", .{
-        .root_source_file = b.path("src/sdk/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "otel-api", .module = otel_api_mod },
-        },
-    });
 
     // ========================================================================
     // OpenTelemetry protobuf generator
@@ -73,7 +57,7 @@ pub fn build(b: *std.Build) void {
     // ========================================================================
     // Contains concrete exporters (console, OTLP, etc.)
 
-    const otel_exporters_mod = b.createModule(.{
+    const otel_exporters_mod = b.addModule("otel-exporters", .{
         .root_source_file = b.path("src/exporters/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -82,28 +66,11 @@ pub fn build(b: *std.Build) void {
     otel_exporters_mod.addImport("otel-sdk", otel_sdk_mod);
     otel_exporters_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
 
-    _ = b.addModule("otel-exporters", .{
-        .root_source_file = b.path("src/exporters/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "otel-api", .module = otel_api_mod },
-            .{ .name = "otel-sdk", .module = otel_sdk_mod },
-            .{ .name = "protobuf", .module = protobuf_dep.module("protobuf") },
-        },
-    });
-
     // ========================================================================
     // OpenTelemetry Semantic Conventions Module
     // ========================================================================
     // Contains semantic conventions, can be used independently
-    const otel_semconv_mod = b.createModule(.{
-        .root_source_file = b.path("src/semconv/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    _ = b.addModule("otel-semconv", .{
+    const otel_semconv_mod = b.addModule("otel-semconv", .{
         .root_source_file = b.path("src/semconv/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -113,7 +80,7 @@ pub fn build(b: *std.Build) void {
     // Convenience "All-in-One" Module
     // ========================================================================
     // Re-exports everything for simple use cases
-    const otel_mod = b.createModule(.{
+    const otel_mod = b.addModule("otel", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -122,18 +89,6 @@ pub fn build(b: *std.Build) void {
     otel_mod.addImport("otel-sdk", otel_sdk_mod);
     otel_mod.addImport("otel-exporters", otel_exporters_mod);
     otel_mod.addImport("otel-semconv", otel_semconv_mod);
-
-    _ = b.addModule("otel", .{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "otel-api", .module = otel_api_mod },
-            .{ .name = "otel-sdk", .module = otel_sdk_mod },
-            .{ .name = "otel-exporters", .module = otel_exporters_mod },
-            .{ .name = "otel-semconv", .module = otel_semconv_mod },
-        },
-    });
 
     // ========================================================================
     // Libraries
