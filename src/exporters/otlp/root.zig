@@ -70,6 +70,10 @@ pub const OtlpExporterConfig = struct {
     /// Request timeout in milliseconds
     timeout_millis: u64 = 10000,
 
+    /// Maximum duration of one complete export, including retries. This is
+    /// the OTLP trace exporter's realization of the BSP export timeout.
+    export_timeout_millis: u64 = 30000,
+
     /// Generic OTLP endpoints append the per-signal path; a traces-specific
     /// endpoint is already complete and sets this false.
     append_signal_path: bool = true,
@@ -103,10 +107,11 @@ pub const TlsConfig = struct {
 
 pub const RetryConfig = struct {
     enabled: bool = true,
-    initial_interval_millis: u64 = 1000,
-    max_interval_millis: u64 = 60000,
-    max_elapsed_time_millis: u64 = 300000,
+    initial_interval_millis: u64 = 5000,
+    max_interval_millis: u64 = 30000,
+    max_elapsed_time_millis: u64 = 60000,
     multiplier: f64 = 1.5,
+    jitter: bool = true,
 };
 
 pub const ProtocolConfig = struct {
