@@ -13,6 +13,7 @@ const api = struct {
     const ContextKeyValue = @import("context.zig").ContextKeyValue;
 };
 const W3cPropagator = @import("../trace/w3c_propagator.zig").W3cPropagator;
+const BaggagePropagator = @import("../baggage/propagator.zig").BaggagePropagator;
 
 /// TextMapCarrier is the interface for carriers used in text map propagation.
 /// It provides methods to get, set, and iterate over key-value pairs.
@@ -46,12 +47,16 @@ pub const TextMapCarrier = struct {
 pub const TextMapPropagator = union(enum) {
     noop: void,
     w3c: W3cPropagator,
+    baggage: BaggagePropagator,
+    composite: []const TextMapPropagator,
 
     /// Inject context into a carrier
     pub fn inject(self: *const TextMapPropagator, ctx: []api.ContextKeyValue, carrier: *TextMapCarrier) void {
         switch (self.*) {
             .noop => {},
             .w3c => |*propagator| propagator.inject(ctx, carrier),
+            .baggage => |*propagator| propagator.inject(ctx, carrier),
+            .composite => |propagators| for (propagators) |*propagator| propagator.inject(ctx, carrier),
         }
     }
 
@@ -65,17 +70,57 @@ pub const TextMapPropagator = union(enum) {
         return switch (self.*) {
             .noop => try api.ContextKeyValue.initOwnedSlice(allocator, ctx),
             .w3c => |*propagator| propagator.extract(allocator, ctx, carrier),
+            .baggage => |*propagator| propagator.extract(allocator, ctx, carrier),
+            .composite => |propagators| blk: {
+                var current = try api.ContextKeyValue.initOwnedSlice(allocator, ctx);
+                errdefer api.ContextKeyValue.deinitOwnedSlice(allocator, current);
+                for (propagators) |*propagator| {
+                    const next = try propagator.extract(allocator, current, carrier);
+                    api.ContextKeyValue.deinitOwnedSlice(allocator, current);
+                    current = next;
+                }
+                break :blk current;
+            },
         };
     }
 
     /// Get the fields that this propagator uses
     pub fn fields(self: *const TextMapPropagator, allocator: std.mem.Allocator) ![]const []const u8 {
         return switch (self.*) {
-            .noop => &[_][]const u8{},
+            .noop => try allocator.alloc([]const u8, 0),
             .w3c => |*propagator| propagator.fields(allocator),
+            .baggage => |*propagator| propagator.fields(allocator),
+            .composite => |propagators| blk: {
+                var result = std.ArrayList([]const u8).empty;
+                defer result.deinit(allocator);
+                for (propagators) |*propagator| {
+                    const propagator_fields = try propagator.fields(allocator);
+                    defer allocator.free(propagator_fields);
+                    for (propagator_fields) |field| {
+                        var found = false;
+                        for (result.items) |existing| {
+                            if (std.mem.eql(u8, existing, field)) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) try result.append(allocator, field);
+                    }
+                }
+                break :blk try result.toOwnedSlice(allocator);
+            },
         };
     }
 };
+
+const w3c_baggage_components = [_]TextMapPropagator{
+    .{ .w3c = W3cPropagator.init() },
+    .{ .baggage = BaggagePropagator.init() },
+};
+
+pub fn createW3cBaggagePropagator() TextMapPropagator {
+    return .{ .composite = &w3c_baggage_components };
+}
 
 /// Simple HashMap-based carrier for testing
 pub const HashMapCarrier = struct {
