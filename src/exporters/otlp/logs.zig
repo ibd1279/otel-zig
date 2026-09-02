@@ -10,6 +10,7 @@ const Transport = @import("root.zig").Transport;
 const Resource = sdk.resource.Resource;
 const ResourceBuilder = sdk.resource.ResourceBuilder;
 const convert = @import("convert.zig");
+const otlp_transport = @import("transport.zig");
 
 // Import protobuf definitions
 const logs_v1 = @import("proto/opentelemetry/proto/logs/v1.pb.zig");
@@ -120,67 +121,15 @@ pub const OtlpLogExporter = struct {
     }
 
     fn sendRequest(self: *OtlpLogExporter, allocator: std.mem.Allocator, data: []const u8) !ExportResult {
-        // Create stack-based HTTP client
-        var client = std.http.Client{ .allocator = self.allocator, .io = self.config.io };
-        defer client.deinit();
-
-        // Parse endpoint URL with detailed error context
-        const uri = std.Uri.parse(self.config.endpoint) catch |err| {
-            return err;
-        };
-
-        // Build full URL with logs path
-        const host_str = switch (uri.host.?) {
-            .raw => |raw| raw,
-            .percent_encoded => |encoded| encoded,
-        };
-        const scheme_str = if (uri.scheme.len > 0) uri.scheme else "http";
-        const full_url = try std.fmt.allocPrint(allocator, "{s}://{s}:{d}{s}", .{ scheme_str, host_str, uri.port orelse 4318, self.config.protocol_config.logs_path });
+        const full_url = try otlp_transport.signalUrl(allocator, self.config, self.config.protocol_config.logs_path);
         defer allocator.free(full_url);
 
-        // Determine content type based on transport
         const content_type = switch (self.config.transport) {
             .http_json => "application/json",
             .http_protobuf, .grpc => "application/x-protobuf",
         };
 
-        // Add custom headers from config (simplified approach)
-        var extra_headers = try allocator.alloc(std.http.Header, self.config.headers.len);
-        defer allocator.free(extra_headers);
-        for (self.config.headers, 0..) |header, h| {
-            extra_headers[h] = header;
-        }
-
-        const full_uri = try std.Uri.parse(full_url);
-        var req = try client.request(.POST, full_uri, .{
-            .headers = .{
-                .content_type = .{ .override = content_type },
-                .user_agent = .{ .override = "otel-zig-otlp" },
-            },
-            .extra_headers = extra_headers,
-        });
-        defer req.deinit();
-
-        // Set request headers
-        req.transfer_encoding = .{ .content_length = @intCast(data.len) };
-
-        // Send request
-        var bw = try req.sendBodyUnflushed(&.{});
-        try bw.writer.writeAll(data);
-        try bw.end();
-        try req.connection.?.flush();
-
-        const res = try req.receiveHead(&.{});
-
-        switch (res.head.status) {
-            .ok => return .success,
-            .bad_request, .unauthorized, .forbidden, .not_found => {
-                return .failure;
-            },
-            else => {
-                return .failure;
-            },
-        }
+        return otlp_transport.post(self.allocator, allocator, self.config, full_url, content_type, self.config.headers, data, "logs");
     }
 
     pub fn logRecordExporter(self: *OtlpLogExporter) sdk.logs.LogRecordExporter {

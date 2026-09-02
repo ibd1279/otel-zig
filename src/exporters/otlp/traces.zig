@@ -17,6 +17,7 @@ const SpanContext = otel_api.trace.SpanContext;
 const error_handler = otel_api.common;
 const SpanExporter = otel_sdk.trace.SpanExporter;
 const convert = @import("convert.zig");
+const otlp_transport = @import("transport.zig");
 
 const common_v1 = @import("proto/opentelemetry/proto/common/v1.pb.zig");
 const resource_v1 = @import("proto/opentelemetry/proto/resource/v1.pb.zig");
@@ -170,24 +171,8 @@ pub const OtlpTraceExporter = struct {
             },
         };
 
-        const full_url = if (self.config.append_signal_path)
-            try joinSignalPath(allocator, self.config.endpoint, self.config.protocol_config.traces_path)
-        else
-            try allocator.dupe(u8, self.config.endpoint);
+        const full_url = try otlp_transport.signalUrl(allocator, self.config, self.config.protocol_config.traces_path);
         defer allocator.free(full_url);
-
-        // Parse endpoint URL with detailed error context
-        const full_uri = std.Uri.parse(full_url) catch |err| {
-            error_handler.reportError(.{
-                .component = .exporter,
-                .operation = "otlp_url_parsing",
-                .error_type = .configuration,
-                .message = "OTLP URL parsing failed",
-                .context = self.config.endpoint,
-                .source_error = err,
-            });
-            return err;
-        };
 
         // Add custom headers from config.
         const compression_headers: usize = if (self.config.compression == .gzip) 1 else 0;
@@ -200,196 +185,11 @@ pub const OtlpTraceExporter = struct {
             extra_headers[self.config.headers.len] = .{ .name = "content-encoding", .value = "gzip" };
         }
 
-        const started_ns = std.Io.Timestamp.now(self.config.io, .awake).nanoseconds;
-        const retry_budget_ms = if (self.config.retry_config.max_elapsed_time_millis == 0)
-            self.config.export_timeout_millis
-        else
-            @min(self.config.retry_config.max_elapsed_time_millis, self.config.export_timeout_millis);
-        var interval_ms = self.config.retry_config.initial_interval_millis;
-        while (true) {
-            const remaining_ms = remainingMillis(self.config.io, started_ns, retry_budget_ms);
-            if (remaining_ms == 0) return error.ExportTimeout;
-            const request_timeout_ms = @min(self.config.timeout_millis, remaining_ms);
-            const response = performWithTimeout(
-                self,
-                allocator,
-                full_uri,
-                content_type,
-                extra_headers,
-                payload,
-                request_timeout_ms,
-            ) catch |err| {
-                if (!self.config.retry_config.enabled) return err;
-                const delay_ms = retryDelay(self.config.io, self.config.retry_config, interval_ms, null);
-                if (!sleepBeforeRetry(self.config.io, started_ns, retry_budget_ms, delay_ms)) return error.ExportRetryExhausted;
-                interval_ms = nextInterval(interval_ms, self.config.retry_config);
-                continue;
-            };
-            defer allocator.free(response.body);
-
-            if (response.status.class() == .success) return .success;
-            if (isRetryableStatus(response.status) and self.config.retry_config.enabled) {
-                const delay_ms = retryDelay(self.config.io, self.config.retry_config, interval_ms, response.retry_after_millis);
-                if (!sleepBeforeRetry(self.config.io, started_ns, retry_budget_ms, delay_ms)) return error.ExportRetryExhausted;
-                interval_ms = nextInterval(interval_ms, self.config.retry_config);
-                continue;
-            }
-
-            const error_context = try std.fmt.allocPrint(allocator, "{t}-{s}", .{ response.status, response.body });
-            defer allocator.free(error_context);
-            error_handler.reportError(.{
-                .component = .exporter,
-                .operation = "otlp_trace_response",
-                .error_type = switch (response.status) {
-                    .unauthorized, .forbidden, .not_found => .authentication,
-                    else => .unknown,
-                },
-                .message = "OTLP trace export failed with HTTP error",
-                .context = error_context,
-            });
-            return .failure;
-        }
+        return otlp_transport.post(self.allocator, allocator, self.config, full_url, content_type, extra_headers, payload, "trace");
     }
 };
 
-const AttemptResponse = struct {
-    status: std.http.Status,
-    body: []u8,
-    retry_after_millis: ?u64,
-};
-
-fn performWithTimeout(
-    exporter: *OtlpTraceExporter,
-    allocator: std.mem.Allocator,
-    uri: std.Uri,
-    content_type: []const u8,
-    extra_headers: []const std.http.Header,
-    payload: []const u8,
-    timeout_ms: u64,
-) !AttemptResponse {
-    const Run = struct {
-        fn run(
-            self: *OtlpTraceExporter,
-            alloc: std.mem.Allocator,
-            request_uri: std.Uri,
-            request_content_type: []const u8,
-            request_headers: []const std.http.Header,
-            request_payload: []const u8,
-        ) !AttemptResponse {
-            var client = std.http.Client{ .allocator = self.allocator, .io = self.config.io };
-            defer client.deinit();
-            var request = try client.request(.POST, request_uri, .{
-                .headers = .{
-                    .content_type = .{ .override = request_content_type },
-                    .user_agent = .{ .override = "otel-zig-otlp" },
-                },
-                .extra_headers = request_headers,
-            });
-            defer request.deinit();
-            request.transfer_encoding = .{ .content_length = request_payload.len };
-            var body = try request.sendBodyUnflushed(&.{});
-            try body.writer.writeAll(request_payload);
-            try body.end();
-            try request.connection.?.flush();
-
-            var response = try request.receiveHead(&.{});
-            const status = response.head.status;
-            var retry_after_millis: ?u64 = null;
-            var headers = response.head.iterateHeaders();
-            while (headers.next()) |header| {
-                if (std.ascii.eqlIgnoreCase(header.name, "retry-after")) {
-                    const seconds = std.fmt.parseInt(u64, std.mem.trim(u8, header.value, " \t"), 10) catch break;
-                    retry_after_millis = seconds *| 1000;
-                    break;
-                }
-            }
-            var response_body = std.Io.Writer.Allocating.init(alloc);
-            errdefer response_body.deinit();
-            const reader = response.reader(&.{});
-            _ = try reader.streamRemaining(&response_body.writer);
-            return .{
-                .status = status,
-                .body = try response_body.toOwnedSlice(),
-                .retry_after_millis = retry_after_millis,
-            };
-        }
-    };
-    const Outcome = union(enum) {
-        request: anyerror!AttemptResponse,
-        timeout: std.Io.Cancelable!void,
-    };
-    var outcomes: [2]Outcome = undefined;
-    var pending = std.Io.Select(Outcome).init(exporter.config.io, &outcomes);
-    // Must be `concurrent`, not `async`: `Io.groupAsync` may run the function
-    // inline on the calling thread (Threaded does so at its async_limit), which
-    // would block the caller until the attempt finishes and make the timeout
-    // branch unreachable. `concurrent` guarantees a unit of concurrency.
-    try pending.concurrent(.request, Run.run, .{ exporter, allocator, uri, content_type, extra_headers, payload });
-    try pending.concurrent(.timeout, std.Io.sleep, .{
-        exporter.config.io,
-        .{ .nanoseconds = @intCast(timeout_ms *| std.time.ns_per_ms) },
-        .awake,
-    });
-    const result = switch (try pending.await()) {
-        .request => |request_result| try request_result,
-        .timeout => {
-            pending.cancelDiscard();
-            return error.Timeout;
-        },
-    };
-    pending.cancelDiscard();
-    return result;
-}
-
-fn isRetryableStatus(status: std.http.Status) bool {
-    return switch (status) {
-        .too_many_requests, .bad_gateway, .service_unavailable, .gateway_timeout => true,
-        else => false,
-    };
-}
-
-fn remainingMillis(io: std.Io, started_ns: i96, budget_ms: u64) u64 {
-    const now_ns = std.Io.Timestamp.now(io, .awake).nanoseconds;
-    const elapsed_ns = @max(0, now_ns - started_ns);
-    const elapsed_ms: u64 = @intCast(@divFloor(elapsed_ns, std.time.ns_per_ms));
-    return budget_ms -| elapsed_ms;
-}
-
-fn retryDelay(io: std.Io, config: @import("root.zig").RetryConfig, interval_ms: u64, retry_after_ms: ?u64) u64 {
-    const backoff = if (!config.jitter or interval_ms < 2)
-        interval_ms
-    else backoff: {
-        const minimum = interval_ms / 2;
-        const maximum = interval_ms +| interval_ms / 2;
-        var random: u64 = undefined;
-        io.random(std.mem.asBytes(&random));
-        break :backoff minimum + random % (maximum - minimum + 1);
-    };
-    return @max(backoff, retry_after_ms orelse 0);
-}
-
-fn nextInterval(current_ms: u64, config: @import("root.zig").RetryConfig) u64 {
-    if (!std.math.isFinite(config.multiplier) or config.multiplier <= 1.0) return @min(current_ms, config.max_interval_millis);
-    const scaled = @as(f64, @floatFromInt(current_ms)) * config.multiplier;
-    if (scaled >= @as(f64, @floatFromInt(config.max_interval_millis))) return config.max_interval_millis;
-    const multiplied: u64 = @intFromFloat(scaled);
-    return @min(config.max_interval_millis, @max(current_ms, multiplied));
-}
-
-fn sleepBeforeRetry(io: std.Io, started_ns: i96, budget_ms: u64, delay_ms: u64) bool {
-    const remaining_ms = remainingMillis(io, started_ns, budget_ms);
-    if (delay_ms >= remaining_ms) return false;
-    io.sleep(.{ .nanoseconds = @intCast(delay_ms *| std.time.ns_per_ms) }, .awake) catch return false;
-    return true;
-}
-
-fn joinSignalPath(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8) ![]u8 {
-    if (path.len == 0) return allocator.dupe(u8, endpoint);
-    return std.fmt.allocPrint(allocator, "{s}/{s}", .{
-        std.mem.trimEnd(u8, endpoint, "/"),
-        std.mem.trimStart(u8, path, "/"),
-    });
-}
+const joinSignalPath = otlp_transport.joinSignalPath;
 
 test "trace endpoint preserves configured paths" {
     const testing = std.testing;

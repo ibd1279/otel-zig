@@ -36,6 +36,7 @@ const otel_sdk = @import("otel-sdk");
 // Re-export types
 pub const OtlpLogExporter = @import("logs.zig").OtlpLogExporter;
 pub const OtlpTraceExporter = @import("traces.zig").OtlpTraceExporter;
+pub const transport = @import("transport.zig");
 pub const OtlpMetricExporter = @import("metrics.zig").OtlpMetricExporter;
 
 // Re-export creation functions
