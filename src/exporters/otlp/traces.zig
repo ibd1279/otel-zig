@@ -666,3 +666,49 @@ test "OtlpTraceExporter basic functionality" {
     const shutdown_result = exporter.shutdown(5000);
     try testing.expectEqual(ExportResult.success, shutdown_result);
 }
+
+test "OTLP trace protobuf bytes are stable" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var span_attributes = [_]otel_api.common.AttributeKeyValue{
+        .{ .key = "http.method", .value = .{ .string = "GET" } },
+        .{ .key = "http.status_code", .value = .{ .int = 503 } },
+        .{ .key = "retry", .value = .{ .bool = true } },
+        .{ .key = "ratio", .value = .{ .float = 0.25 } },
+    };
+    var span = testSpan("golden-span");
+    span.parent_ctx = .{
+        .trace_id = span.ctx.trace_id,
+        .span_id = .{ .bytes = @as([8]u8, @splat(3)) },
+        .trace_flags = 1,
+        .trace_state = null,
+        .is_remote = true,
+    };
+    span.kind = .server;
+    span.status = .{ .code = .@"error", .description = "upstream unavailable" };
+    span.start_time = 1_700_000_000_000_000_000;
+    span.end_time = 1_700_000_000_250_000_000;
+    span.attributes = &span_attributes;
+    const resource_attributes = [_]otel_api.common.AttributeKeyValue{
+        .{ .key = "service.name", .value = .{ .string = "golden" } },
+    };
+    const spans = [_]otel_sdk.trace.SpanData{span};
+    var traces_data = try convertToOtlpFormat(allocator, &spans, .{ .attributes = &resource_attributes });
+    var buffer = std.Io.Writer.Allocating.init(allocator);
+    try traces_data.encode(&buffer.writer, allocator);
+
+    const hex = try std.fmt.allocPrint(allocator, "{x}", .{buffer.written()});
+    try testing.expectEqualStrings(golden_trace_hex, hex);
+}
+
+// Recorded from zig 0.16 with zig-protobuf 4.0.0; pins the OTLP wire bytes
+// across compiler and protobuf upgrades.
+const golden_trace_hex =
+    "0ae9010a1a0a180a0c736572766963652e6e616d6512080a06676f6c64656e12ca010a0e0a0c6f66666c696e652d7465" ++
+    "737412b7010a100101010101010101010101010101010112080202020202020202220803030303030303038501010000" ++
+    "002a0b676f6c64656e2d7370616e30023900002a36fe9c97174180b21045fe9c97174a140a0b687474702e6d6574686f" ++
+    "6412050a034745544a170a10687474702e7374617475735f636f6465120318f7034a0b0a057265747279120210014a12" ++
+    "0a05726174696f120921000000000000d03f7a181214757073747265616d20756e617661696c61626c651802";

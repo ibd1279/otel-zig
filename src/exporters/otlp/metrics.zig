@@ -465,3 +465,91 @@ test "convertToOtlpFormat with histogram" {
         try testing.expect(false);
     }
 }
+
+test "OTLP metric protobuf bytes are stable" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const resource_attrs = [_]otel_api.common.AttributeKeyValue{
+        .{ .key = "service.name", .value = .{ .string = "golden" } },
+    };
+    const resource = otel_sdk.resource.Resource{ .attributes = &resource_attrs };
+    const scope = otel_api.InstrumentationScope{ .name = "golden-scope", .version = "1.0.0" };
+    const point_attrs = [_]otel_api.common.AttributeKeyValue{
+        .{ .key = "route", .value = .{ .string = "/subscribe" } },
+    };
+    const boundaries = [_]f64{ 1.0, 5.0, 10.0 };
+    const bucket_counts = [_]u64{ 2, 3, 1, 0 };
+    const metrics = [_]otel_sdk.metrics.MetricData{
+        .{
+            .resource = resource,
+            .scope = scope,
+            .name = "requests_total",
+            .description = "requests served",
+            .unit = "1",
+            .type = .sum,
+            .data_points = &[_]otel_sdk.metrics.MetricDataPoint{.{
+                .attributes = &point_attrs,
+                .timestamp_ns = 1_700_000_000_000_000_000,
+                .start_timestamp_ns = 1_699_999_000_000_000_000,
+                .value = .{ .i64_sum = 42 },
+            }},
+        },
+        .{
+            .resource = resource,
+            .scope = scope,
+            .name = "queue_depth",
+            .description = "pending rows",
+            .unit = "1",
+            .type = .gauge,
+            .data_points = &[_]otel_sdk.metrics.MetricDataPoint{.{
+                .attributes = &point_attrs,
+                .timestamp_ns = 1_700_000_000_000_000_000,
+                .start_timestamp_ns = null,
+                .value = .{ .f64_gauge = 3.5 },
+            }},
+        },
+        .{
+            .resource = resource,
+            .scope = scope,
+            .name = "latency",
+            .description = "request latency",
+            .unit = "ms",
+            .type = .histogram,
+            .data_points = &[_]otel_sdk.metrics.MetricDataPoint{.{
+                .attributes = &point_attrs,
+                .timestamp_ns = 1_700_000_000_000_000_000,
+                .start_timestamp_ns = 1_699_999_000_000_000_000,
+                .value = .{ .f64_histogram = .{
+                    .count = 6,
+                    .sum = 25.5,
+                    .min = 0.5,
+                    .max = 9.2,
+                    .boundaries = &boundaries,
+                    .bucket_counts = &bucket_counts,
+                } },
+            }},
+        },
+    };
+    var metrics_data = try convertToOtlpFormat(allocator, &metrics);
+    var buffer = std.Io.Writer.Allocating.init(allocator);
+    try metrics_data.encode(&buffer.writer, allocator);
+
+    const hex = try std.fmt.allocPrint(allocator, "{x}", .{buffer.written()});
+    try testing.expectEqualStrings(golden_metric_hex, hex);
+}
+
+// Recorded from zig 0.16 with zig-protobuf 4.0.0; pins the OTLP wire bytes
+// across compiler and protobuf upgrades.
+const golden_metric_hex =
+    "0a93030a1a0a180a0c736572766963652e6e616d6512080a06676f6c64656e12f4020a150a0c676f6c64656e2d73636f" ++
+    "70651205312e302e30125c0a0e72657175657374735f746f74616c120f7265717565737473207365727665641a01313a" ++
+    "360a323a150a05726f757465120c0a0a2f7375627363726962651100f08461159c97171900002a36fe9c9717312a0000" ++
+    "00000000001001124b0a0b71756575655f6465707468120c70656e64696e6720726f77731a01312a2b0a293a150a0572" ++
+    "6f757465120c0a0a2f7375627363726962651900002a36fe9c9717210000000000000c4012af010a076c6174656e6379" ++
+    "120f72657175657374206c6174656e63791a026d734a8e010a89014a150a05726f757465120c0a0a2f73756273637269" ++
+    "62651100f08461159c97171900002a36fe9c971721060000000000000029000000000080394032200200000000000000" ++
+    "0300000000000000010000000000000000000000000000003a18000000000000f03f0000000000001440000000000000" ++
+    "244059000000000000e03f6166666666666622401001";

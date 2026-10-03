@@ -664,3 +664,37 @@ test "OtlpLogExporter severity mapping covers all spec levels" {
         }
     }
 }
+
+test "OTLP log protobuf bytes are stable" {
+    const testing = std.testing;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const resource_attributes = [_]api.common.AttributeKeyValue{
+        .{ .key = "service.name", .value = .{ .string = "golden" } },
+    };
+    const record = LogRecord{
+        .timestamp_ns = 1_700_000_000_000_000_000,
+        .severity_number = .warn,
+        .body = .{ .string = "disk nearly full" },
+        .attributes = &[_]api.common.AttributeKeyValue{
+            .{ .key = "volume", .value = .{ .string = "/data" } },
+            .{ .key = "free_bytes", .value = .{ .int = 4096 } },
+            .{ .key = "degraded", .value = .{ .bool = true } },
+        },
+    };
+    var exporter = OtlpLogExporter.init(allocator, .{ .transport = .http_protobuf });
+    const bytes = try exporter.convertToProtobufFormat(allocator, &[_]LogRecord{record}, .{ .attributes = &resource_attributes });
+
+    const hex = try std.fmt.allocPrint(allocator, "{x}", .{bytes});
+    try testing.expectEqualStrings(golden_log_hex, hex);
+}
+
+// Recorded from zig 0.16 with zig-protobuf 4.0.0; pins the OTLP wire bytes
+// across compiler and protobuf upgrades.
+const golden_log_hex =
+    "0a8f010a1a0a180a0c736572766963652e6e616d6512080a06676f6c64656e12710a090a07756e6b6e6f776e12640900" ++
+    "002a36fe9c97175900002a36fe9c9717100d1a045741524e2a120a106469736b206e6561726c792066756c6c32110a06" ++
+    "766f6c756d6512070a052f6461746132110a0a667265655f62797465731203188020320e0a0864656772616465641202" ++
+    "1001";
