@@ -161,8 +161,9 @@ pub fn fromText(text: []const u8) SeverityError!Severity {
     const upper = std.ascii.upperString(&buf, text);
 
     // Check all severity values
-    inline for (@typeInfo(Severity).@"enum".fields) |field| {
-        const severity: Severity = @enumFromInt(field.value);
+    const enum_info = @typeInfo(Severity).@"enum";
+    inline for (enum_info.field_names, enum_info.field_values) |_, value| {
+        const severity: Severity = @enumFromInt(value);
         if (std.mem.eql(u8, upper, severity.toText())) {
             return severity;
         }

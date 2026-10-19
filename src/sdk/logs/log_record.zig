@@ -143,8 +143,16 @@ test "LogRecord initOwned and deinitOwned" {
         .body = .{ .string = "Test message" },
         .event_name = "test.event",
         .attributes = attributes,
-        .trace_id = api.common.TraceId.fromBytes([_]u8{1} ++ [_]u8{0} ** 15),
-        .span_id = api.common.SpanId.fromBytes([_]u8{2} ++ [_]u8{0} ** 7),
+        .trace_id = blk: {
+            var bytes: [16]u8 = @splat(0);
+            bytes[0] = 1;
+            break :blk api.common.TraceId.fromBytes(bytes);
+        },
+        .span_id = blk: {
+            var bytes: [8]u8 = @splat(0);
+            bytes[0] = 2;
+            break :blk api.common.SpanId.fromBytes(bytes);
+        },
         .flags = 0x01,
     };
 

@@ -331,7 +331,7 @@ test "BaggageKeyValue eql method" {
 
 test "BaggageKeyValue format method" {
     const testing = std.testing;
-    var buffer = [_]u8{0} ** 60;
+    var buffer: [60]u8 = @splat(0);
 
     // Test formatting without metadata
     const entry1 = BaggageKeyValue{ .key = "user.id", .value = "12345", .metadata = null };

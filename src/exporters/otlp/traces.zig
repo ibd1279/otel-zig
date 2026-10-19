@@ -410,8 +410,8 @@ fn testSpan(name: []const u8) otel_sdk.trace.SpanData {
     return .{
         .scope = .{ .name = "offline-test" },
         .ctx = .{
-            .trace_id = .{ .bytes = [_]u8{1} ** 16 },
-            .span_id = .{ .bytes = [_]u8{2} ** 8 },
+            .trace_id = .{ .bytes = @splat(1) },
+            .span_id = .{ .bytes = @splat(2) },
             .trace_flags = 1,
             .trace_state = null,
             .is_remote = false,

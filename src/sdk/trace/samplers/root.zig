@@ -55,7 +55,7 @@ test "always_on sampler creation" {
     const params = otel_api.trace.Sampler.Params{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test-span",
         .span_kind = .internal,
     };
@@ -70,7 +70,7 @@ test "traceIdRatioBased sampler creation" {
     const params = otel_api.trace.Sampler.Params{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test-span",
         .span_kind = .internal,
     };
@@ -85,7 +85,7 @@ test "always_off creation" {
     const params = otel_api.trace.Sampler.Params{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test-span",
         .span_kind = .internal,
     };
@@ -101,7 +101,7 @@ test "parentBased sampler creation" {
     const params = otel_api.trace.Sampler.Params{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test-span",
         .span_kind = .internal,
     };
@@ -116,7 +116,7 @@ test "alwaysRecord sampler creation" {
     const params = otel_api.trace.Sampler.Params{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test-span",
         .span_kind = .internal,
     };

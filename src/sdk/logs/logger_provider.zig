@@ -43,7 +43,7 @@ pub const LoggerProvider = struct {
             .processors = .empty,
             .mutex = std.Io.Mutex.init,
             .is_shutdown = .init(false),
-            .default_min_severity = if (@import("builtin").mode == .Debug) .debug else .warn,
+            .default_min_severity = if (@import("builtin").mode == .debug) .debug else .warn,
         };
     }
 

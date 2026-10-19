@@ -177,7 +177,7 @@ var handler_mutex: std.atomic.Mutex = .unlocked;
 /// - `true` in debug builds (validation enabled)
 /// - `false` in release builds (validation disabled, zero-cost)
 pub inline fn isValidatingMode() bool {
-    return builtin.mode == .Debug;
+    return builtin.mode == .debug;
 }
 
 /// Default error handler that logs to stderr

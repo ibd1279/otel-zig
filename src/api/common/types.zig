@@ -66,12 +66,14 @@ test "TraceId validity checks" {
     const testing = std.testing;
 
     // Test invalid TraceId (all zeros)
-    const invalid_trace_id = TraceId{ .bytes = [_]u8{0} ** 16 };
+    const invalid_trace_id = TraceId{ .bytes = @splat(0) };
     try testing.expect(invalid_trace_id.isInvalid());
     try testing.expect(!invalid_trace_id.isValid());
 
     // Test valid TraceId
-    const valid_trace_id = TraceId{ .bytes = [_]u8{1} ++ [_]u8{0} ** 15 };
+    var valid_bytes: [16]u8 = @splat(0);
+    valid_bytes[0] = 1;
+    const valid_trace_id = TraceId{ .bytes = valid_bytes };
     try testing.expect(!valid_trace_id.isInvalid());
     try testing.expect(valid_trace_id.isValid());
 }
@@ -80,12 +82,14 @@ test "SpanId validity checks" {
     const testing = std.testing;
 
     // Test invalid SpanId (all zeros)
-    const invalid_span_id = SpanId{ .bytes = [_]u8{0} ** 8 };
+    const invalid_span_id = SpanId{ .bytes = @splat(0) };
     try testing.expect(invalid_span_id.isInvalid());
     try testing.expect(!invalid_span_id.isValid());
 
     // Test valid SpanId
-    const valid_span_id = SpanId{ .bytes = [_]u8{1} ++ [_]u8{0} ** 7 };
+    var valid_bytes: [8]u8 = @splat(0);
+    valid_bytes[0] = 1;
+    const valid_span_id = SpanId{ .bytes = valid_bytes };
     try testing.expect(!valid_span_id.isInvalid());
     try testing.expect(valid_span_id.isValid());
 }

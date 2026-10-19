@@ -280,10 +280,10 @@ pub const StateKeyValue = struct {
         try std.testing.expect(!validateValue("value\twith\ttab"));
 
         // Test length limit
-        const long_value = "a" ** 257;
-        try std.testing.expect(!validateValue(long_value));
-        const max_value = "a" ** 256;
-        try std.testing.expect(validateValue(max_value));
+        const long_value: [257]u8 = @splat('a');
+        try std.testing.expect(!validateValue(&long_value));
+        const max_value: [256]u8 = @splat('a');
+        try std.testing.expect(validateValue(&max_value));
     }
 
     /// Compare two StateKeyValue pairs for equality.
@@ -329,7 +329,7 @@ pub const OtState = struct {
                 const key = slice[0..eq_pos];
                 const value = slice[eq_pos + 1 ..];
                 if (std.mem.eql(u8, "th", key) and value.len <= 14) {
-                    var buffer = [_]u8{0} ** 7;
+                    var buffer: [7]u8 = @splat(0);
                     for (0..7) |h| {
                         if (h * 2 >= value.len) break;
                         buffer[h] |= (try std.fmt.parseInt(u8, value[h * 2 .. h * 2 + 1], 16)) << 4;
@@ -338,7 +338,7 @@ pub const OtState = struct {
                     }
                     result.th = std.mem.readInt(u56, &buffer, .big);
                 } else if (std.mem.eql(u8, "rv", key) and value.len == 14) {
-                    var buffer = [_]u8{0} ** 7;
+                    var buffer: [7]u8 = @splat(0);
                     for (0..buffer.len) |h| buffer[h] = try std.fmt.parseInt(u8, value[h * 2 .. h * 2 + 2], 16);
                     result.rv = std.mem.readInt(u56, &buffer, .big);
                 }

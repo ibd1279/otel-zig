@@ -50,7 +50,7 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    gen_proto.dependOn(&protoc_step.step);
+    gen_proto.dependOn(protoc_step.step);
 
     // ========================================================================
     // OpenTelemetry SDK Exporters Module
@@ -426,9 +426,7 @@ pub fn build(b: *std.Build) void {
     multithreaded_http_example.root_module.addImport("otel-semconv", otel_semconv_mod);
 
     const run_multithreaded_http = b.addRunArtifact(multithreaded_http_example);
-    if (b.args) |args| {
-        run_multithreaded_http.addArgs(args);
-    }
+    run_multithreaded_http.addPassthruArgs();
     const multithreaded_http_step = b.step("example-multithreaded-http", "Run multithreaded HTTP telemetry example");
     multithreaded_http_step.dependOn(&run_multithreaded_http.step);
 

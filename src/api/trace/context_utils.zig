@@ -221,8 +221,8 @@ test "getActiveSpanContext and getRemoteSpanContext" {
 
     // Add active span context
     const active_span = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x01} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x02} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x01)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x02)),
         .trace_flags = 1,
         .trace_state = null,
         .is_remote = false,
@@ -237,8 +237,8 @@ test "getActiveSpanContext and getRemoteSpanContext" {
 
     // Add remote span context
     const remote_span = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x03} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x04} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x03)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x04)),
         .trace_flags = 0,
         .trace_state = null,
         .is_remote = true,
@@ -260,16 +260,16 @@ test "getSpanContext prefers active over remote" {
     defer api.ContextKeyValue.deinitOwnedSlice(allocator, ctx);
 
     const active_span = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x01} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x02} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x01)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x02)),
         .trace_flags = 1,
         .trace_state = null,
         .is_remote = false,
     };
 
     const remote_span = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x03} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x04} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x03)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x04)),
         .trace_flags = 0,
         .trace_state = null,
         .is_remote = true,
@@ -313,8 +313,8 @@ test "withActiveSpanContext and withRemoteSpanContext" {
     defer api.ContextKeyValue.deinitOwnedSlice(allocator, ctx);
 
     const span_context = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x01} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x02} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x01)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x02)),
         .trace_flags = 1,
         .trace_state = null,
         .is_remote = false,
@@ -344,8 +344,8 @@ test "createChildSpanContext" {
     const random = prng.random();
 
     const parent = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x01} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x02} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x01)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x02)),
         .trace_flags = 1,
         .trace_state = "parent=state",
         .is_remote = false,
@@ -395,8 +395,8 @@ test "hasSpanContext functions" {
     try testing.expect(!hasRemoteSpanContext(ctx));
 
     const span_context = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x01} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x02} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x01)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x02)),
         .trace_flags = 1,
         .trace_state = null,
         .is_remote = false,
@@ -538,8 +538,8 @@ test "getActiveSpan returns valid noop after attach" {
     const allocator = testing.allocator;
 
     const span_ctx = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x01} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x02} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x01)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x02)),
         .trace_flags = api.trace.Span.Context.SAMPLED_FLAG,
         .trace_state = null,
         .is_remote = false,

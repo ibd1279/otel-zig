@@ -102,8 +102,8 @@ test "context keys can wrap and unwrap values" {
 
     // Test Span.Context key
     const span_ctx = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x01} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x02} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x01)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x02)),
         .trace_flags = 1,
         .trace_state = null,
         .is_remote = false,
@@ -142,8 +142,8 @@ test "context keys validate value types correctly" {
 
     // Test correct type validation
     const span_ctx = api.trace.Span.Context{
-        .trace_id = api.common.TraceId.fromBytes([_]u8{0x01} ** 16),
-        .span_id = api.common.SpanId.fromBytes([_]u8{0x02} ** 8),
+        .trace_id = api.common.TraceId.fromBytes(@splat(0x01)),
+        .span_id = api.common.SpanId.fromBytes(@splat(0x02)),
         .trace_flags = 1,
         .trace_state = null,
         .is_remote = false,

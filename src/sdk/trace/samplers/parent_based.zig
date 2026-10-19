@@ -68,8 +68,8 @@ const testing = std.testing;
 
 fn makeCtxWithParent(allocator: std.mem.Allocator, sampled: bool, is_remote: bool) ![]otel_api.ContextKeyValue {
     const parent_span_context = otel_api.trace.Span.Context{
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
-        .span_id = SpanId.fromBytes([_]u8{2} ** 8),
+        .trace_id = TraceId.fromBytes(@splat(1)),
+        .span_id = SpanId.fromBytes(@splat(2)),
         .trace_flags = if (sampled) otel_api.trace.Span.Context.SAMPLED_FLAG else 0,
         .trace_state = null,
         .is_remote = is_remote,
@@ -83,7 +83,7 @@ test "ParentBasedSampler - no parent delegates to root sampler" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "root-span",
         .span_kind = .server,
     });
@@ -104,7 +104,7 @@ test "ParentBasedSampler - remote+sampled routes to remoteParentSampled" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = ctx,
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "child",
         .span_kind = .client,
     });
@@ -122,7 +122,7 @@ test "ParentBasedSampler - remote+unsampled routes to remoteParentNotSampled" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = ctx,
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "child",
         .span_kind = .client,
     });
@@ -140,7 +140,7 @@ test "ParentBasedSampler - local+sampled routes to localParentSampled" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = ctx,
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "child",
         .span_kind = .internal,
     });
@@ -158,7 +158,7 @@ test "ParentBasedSampler - local+unsampled routes to localParentNotSampled" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = ctx,
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "child",
         .span_kind = .internal,
     });
