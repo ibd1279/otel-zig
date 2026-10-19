@@ -130,19 +130,30 @@ pub fn build(b: *std.Build) void {
     // Tests
     // ========================================================================
 
+    // Zig 0.16.0's default self-hosted x86_64 backend segfaults (silently, no
+    // panic message) while compiling this project's test builds — see
+    // https://ziggit.dev/t/anyone-else-having-compiler-segfault-with-0-16-0-when-using-certain-libraries/15512.
+    // Forcing the LLVM backend works around it; non-test builds are unaffected.
+
     // API tests
     const api_unit_tests = b.addTest(.{
         .root_module = otel_api_mod,
+        .use_llvm = true,
     });
     const run_api_tests = b.addRunArtifact(api_unit_tests);
 
     // SDK tests
     const sdk_unit_tests = b.addTest(.{
         .root_module = otel_sdk_mod,
+        .use_llvm = true,
     });
     const run_sdk_tests = b.addRunArtifact(sdk_unit_tests);
 
     // Exporters tests
+    // NOTE: deliberately NOT `.use_llvm = true` — the LLVM backend needs far
+    // more RAM (protobuf codegen) and gets OOM-killed on memory-constrained
+    // machines, while the self-hosted backend compiles this target fine (the
+    // 0.16.0 backend SEGV only affects SDK-including test builds).
     const exporters_unit_tests = b.addTest(.{
         .root_module = otel_exporters_mod,
     });
@@ -151,6 +162,7 @@ pub fn build(b: *std.Build) void {
     // Integration tests
     const integration_tests = b.addTest(.{
         .root_module = otel_mod,
+        .use_llvm = true,
     });
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
@@ -161,6 +173,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = true,
     });
     async_observable_tests.root_module.addImport("otel-api", otel_api_mod);
     async_observable_tests.root_module.addImport("otel-sdk", otel_sdk_mod);
@@ -173,6 +186,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = true,
     });
     comprehensive_error_tests.root_module.addImport("otel-api", otel_api_mod);
     comprehensive_error_tests.root_module.addImport("otel-sdk", otel_sdk_mod);

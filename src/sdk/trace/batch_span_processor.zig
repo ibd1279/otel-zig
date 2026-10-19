@@ -261,15 +261,13 @@ pub const BatchSpanProcessor = struct {
             };
 
             self.mutex.unlock(self.io);
-            if (self.exporter) |exporter| {
-                for (spans_to_export) |data_pair| {
-                    _ = exporter.exportSpans(&.{data_pair.data}, data_pair.resource);
-                }
-            }
-            for (spans_to_export) |data_pair| {
-                data_pair.data.deinitOwned(self.allocator);
-            }
-            self.allocator.free(spans_to_export);
+            // Chunked export (max_export_batch_size per call) via the same
+            // helper the background thread uses, so the exporter sees
+            // identical batching regardless of who drains the queue.
+            // Flush still runs below; a failed batch export surfaces there
+            // or as an error report — forceFlush's contract is the exporter's
+            // own result, matching the pre-chunking behavior.
+            _ = self.exportOwned(spans_to_export);
             self.mutex.lockUncancelable(self.io);
         }
 

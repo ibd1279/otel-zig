@@ -230,8 +230,14 @@ pub const OtlpTraceExporter = struct {
         };
         var outcomes: [2]Outcome = undefined;
         var pending = std.Io.Select(Outcome).init(io, &outcomes);
-        pending.async(.request, Fetch.run, .{ &client, fetch_options });
-        pending.async(.timeout, std.Io.sleep, .{
+        // Must be `concurrent`, not `async`: `Select.async` (Io.groupAsync) is
+        // allowed to run the function inline on the calling thread (e.g. when
+        // the io backend's async worker limit is reached), which would block
+        // sendRequest until the HTTP request finishes and make the timeout
+        // branch unreachable. `concurrent` guarantees both branches a unit of
+        // concurrency, so the deadline race is real.
+        try pending.concurrent(.request, Fetch.run, .{ &client, fetch_options });
+        try pending.concurrent(.timeout, std.Io.sleep, .{
             io,
             .{ .nanoseconds = @intCast(self.config.timeout_millis *| std.time.ns_per_ms) },
             .awake,
