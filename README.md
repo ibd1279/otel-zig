@@ -6,7 +6,7 @@ This is a zig implementation of the OTel API and SDK. It was built for zig 0.16.
 
 - `zig build` - Build and compile the libraries (otel-api, otel-sdk, otel-exporters, otel)
 - `zig build install` - Install libraries to the standard install directory
-- `zig build test` - Run all unit tests
+- `zig build test --test-timeout 10s` - Run all unit tests (the timeout kills a hung test instead of wedging the build; the suite normally runs in under a second)
 - `zig build examples-install` - Build and install example executables
 - `zig build examples` - Run all examples without installing
 - `zig build example-<name>` - Run a specific example (e.g., `zig build example-simple-trace-sdk`)
