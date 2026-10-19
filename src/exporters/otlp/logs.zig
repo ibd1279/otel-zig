@@ -6,6 +6,7 @@ const protobuf = @import("protobuf");
 const LogRecord = sdk.logs.LogRecord;
 const ExportResult = api.common.ExportResult;
 const OtlpExporterConfig = @import("root.zig").OtlpExporterConfig;
+const Transport = @import("root.zig").Transport;
 const Resource = sdk.resource.Resource;
 const ResourceBuilder = sdk.resource.ResourceBuilder;
 const convert = @import("convert.zig");
@@ -65,13 +66,7 @@ pub const OtlpLogExporter = struct {
         var arena = std.heap.ArenaAllocator.init(self.allocator);
         defer arena.deinit();
 
-        // Choose format based on transport configuration
-        const data_result = switch (self.config.transport) {
-            .http_json => self.convertToJsonFormat(arena.allocator(), records, resource),
-            .http_protobuf, .grpc => self.convertToProtobufFormat(arena.allocator(), records, resource),
-        };
-
-        const data = data_result catch |err| {
+        const data = self.convertForTransport(arena.allocator(), records, resource) catch |err| {
             error_handler.reportError(.{
                 .component = .exporter,
                 .operation = "otlp_serialization",
@@ -190,6 +185,16 @@ pub const OtlpLogExporter = struct {
 
     pub fn logRecordExporter(self: *OtlpLogExporter) sdk.logs.LogRecordExporter {
         return sdk.logs.LogRecordExporter{ .bridge = sdk.logs.BridgeLogRecordExporter.init(self) };
+    }
+
+    /// Chooses the wire format for the configured transport. This is the
+    /// dispatch `exportRecords` performs; extracted so tests can exercise
+    /// the transport->format mapping without a network endpoint.
+    fn convertForTransport(self: *OtlpLogExporter, allocator: std.mem.Allocator, records: []const LogRecord, resource: Resource) ![]u8 {
+        return switch (self.config.transport) {
+            .http_json => self.convertToJsonFormat(allocator, records, resource),
+            .http_protobuf, .grpc => self.convertToProtobufFormat(allocator, records, resource),
+        };
     }
 
     fn convertToJsonFormat(self: *OtlpLogExporter, allocator: std.mem.Allocator, records: []const LogRecord, resource: Resource) ![]u8 {
@@ -545,6 +550,78 @@ test "OtlpLogExporter protobuf binary round-trip decode and field validation" {
     // the converter hardcodes 0 and nothing maps to it, so this cannot
     // catch a regression.
     try testing.expectEqual(@as(u32, 0), decoded_record.dropped_attributes_count);
+}
+
+test "OtlpLogExporter transport dispatch selects the correct wire format" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const resource = try Resource.initOwned(allocator, .default);
+    defer resource.deinitOwned(allocator);
+
+    const log_record = LogRecord{
+        .timestamp = std.Io.Timestamp.fromNanoseconds(1000000000),
+        .severity_number = .info,
+        .body = .{ .string = "test message" },
+    };
+
+    // Exercise the config-driven dispatch that `exportRecords` performs
+    // (extracted into convertForTransport), per transport.
+    const transports = [_]Transport{ .http_json, .http_protobuf, .grpc };
+    for (transports) |transport| {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        var exporter = OtlpLogExporter.init(allocator, .{ .io = std.testing.io, .transport = transport });
+        const data = try exporter.convertForTransport(arena.allocator(), &[_]LogRecord{log_record}, resource);
+        try testing.expect(data.len > 0);
+
+        switch (transport) {
+            .http_json => {
+                // JSON transport must produce JSON: structurally recognizable
+                // and parseable as the LogsData JSON model.
+                try testing.expect(std.mem.find(u8, data, "resourceLogs") != null);
+                const parsed = try std.json.parseFromSlice(std.json.Value, arena.allocator(), data, .{});
+                defer parsed.deinit();
+                try testing.expect(parsed.value == .object);
+            },
+            .http_protobuf, .grpc => {
+                // Binary transports must produce decodable OTLP/LogsData
+                // protobuf, and must NOT be JSON.
+                try testing.expect(std.mem.find(u8, data, "resourceLogs") == null);
+                var in: std.Io.Reader = .fixed(data);
+                const decoded = try logs_v1.LogsData.decode(&in, arena.allocator());
+                try testing.expectEqual(@as(usize, 1), decoded.resource_logs.items.len);
+                const decoded_record = decoded.resource_logs.items[0].scope_logs.items[0].log_records.items[0];
+                try testing.expectEqual(logs_v1.SeverityNumber.SEVERITY_NUMBER_INFO, decoded_record.severity_number);
+                try testing.expectEqualStrings("test message", decoded_record.body.?.value.?.string_value);
+            },
+        }
+    }
+}
+
+test "OtlpLogExporter exportRecords fails fast after shutdown without network" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const resource = try Resource.initOwned(allocator, .default);
+    defer resource.deinitOwned(allocator);
+
+    const log_record = LogRecord{
+        .timestamp = std.Io.Timestamp.fromNanoseconds(1000000000),
+        .severity_number = .info,
+        .body = .{ .string = "test message" },
+    };
+
+    var exporter = OtlpLogExporter.init(allocator, .{ .io = std.testing.io, .transport = .http_protobuf });
+
+    // shutdown() succeeds once, then reports failure.
+    try testing.expectEqual(ExportResult.success, exporter.shutdown(null));
+    try testing.expectEqual(ExportResult.failure, exporter.shutdown(null));
+
+    // exportRecords after shutdown must fail fast (no network I/O), which is
+    // why this is safe to call in a unit test with an unreachable endpoint.
+    try testing.expectEqual(ExportResult.failure, exporter.exportRecords(&[_]LogRecord{log_record}, resource));
 }
 
 test "OtlpLogExporter severity_text passthrough documents converter gap" {
