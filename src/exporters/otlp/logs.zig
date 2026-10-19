@@ -360,51 +360,14 @@ test "OtlpLogExporter transport selection" {
         defer arena.deinit();
 
         const json_data = try exporter.convertToJsonFormat(arena.allocator(), &[_]LogRecord{log_record}, resource);
-        try testing.expect(json_data.len > 0);
         try testing.expect(std.mem.find(u8, json_data, "test message") != null);
         try testing.expect(std.mem.find(u8, json_data, "test.key") != null);
         try testing.expect(std.mem.find(u8, json_data, "telemetry.sdk.name") != null);
     }
-
-    // Test protobuf transport
-    {
-        const config = OtlpExporterConfig{
-            .io = std.testing.io,
-            .endpoint = "http://localhost:4318",
-            .transport = .http_protobuf,
-        };
-
-        var exporter = OtlpLogExporter.init(allocator, config);
-        defer exporter.deinit();
-
-        // Test protobuf format conversion
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-
-        const protobuf_data = try exporter.convertToProtobufFormat(arena.allocator(), &[_]LogRecord{log_record}, resource);
-        try testing.expect(protobuf_data.len > 0);
-        // Protobuf is binary format, so we can't check for string content directly
-        // But we can verify it's not empty and different from JSON
-    }
-
-    // Test gRPC transport (should use protobuf format)
-    {
-        const config = OtlpExporterConfig{
-            .io = std.testing.io,
-            .endpoint = "http://localhost:4318",
-            .transport = .grpc,
-        };
-
-        var exporter = OtlpLogExporter.init(allocator, config);
-        defer exporter.deinit();
-
-        // Test gRPC format conversion (should be same as protobuf)
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        defer arena.deinit();
-
-        const grpc_data = try exporter.convertToProtobufFormat(arena.allocator(), &[_]LogRecord{log_record}, resource);
-        try testing.expect(grpc_data.len > 0);
-    }
+    // The http_protobuf and grpc transports both route to
+    // convertToProtobufFormat via the dispatch, which is covered (including
+    // format correctness) by "transport dispatch selects the correct wire
+    // format" below.
 }
 
 test "OtlpLogExporter severity mapping" {
@@ -450,11 +413,9 @@ test "OtlpLogExporter protobuf format validation" {
     // Generate binary protobuf
     const protobuf_data = try exporter.convertToProtobufFormat(arena.allocator(), &[_]LogRecord{log_record}, resource);
 
-    // Validate both formats are generated successfully
-    try testing.expect(protobuf_json.len > 0);
-    try testing.expect(protobuf_data.len > 0);
-
-    // Protobuf binary should be smaller than JSON
+    // Validate both formats are generated successfully. Non-emptiness of the
+    // binary payload is asserted (and its content decoded) by the round-trip
+    // and dispatch tests below; here we only compare relative sizes.
     try testing.expect(protobuf_data.len < protobuf_json.len);
 
     // JSON should contain the test message and attributes
