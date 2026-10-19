@@ -462,3 +462,81 @@ test "OtlpLogExporter protobuf format validation" {
     try testing.expect(std.mem.find(u8, protobuf_json, "scopeLogs") != null);
     try testing.expect(std.mem.find(u8, protobuf_json, "logRecords") != null);
 }
+
+test "OtlpLogExporter protobuf binary round-trip decode and field validation" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Create test resource
+    const resource = try Resource.initOwned(allocator, .default);
+    defer resource.deinitOwned(allocator);
+
+    // Create a test log record exercising every field the converter maps.
+    const trace_id_bytes = [_]u8{ 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10 };
+    const span_id_bytes = [_]u8{ 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x18 };
+    const log_record = LogRecord{
+        .timestamp = std.Io.Timestamp.fromNanoseconds(1000000000),
+        .severity_number = .info,
+        .body = .{ .string = "test message" },
+        .attributes = &[_]api.common.AttributeKeyValue{
+            .{ .key = "test.key", .value = .{ .string = "test.value" } },
+            .{ .key = "test.number", .value = .{ .int = 42 } },
+        },
+        .trace_id = api.common.TraceId.fromBytes(trace_id_bytes),
+        .span_id = api.common.SpanId.fromBytes(span_id_bytes),
+    };
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var exporter = OtlpLogExporter.init(allocator, .{ .io = std.testing.io, .transport = .http_protobuf });
+
+    // Generate the binary OTLP/protobuf payload.
+    const protobuf_data = try exporter.convertToProtobufFormat(arena.allocator(), &[_]LogRecord{log_record}, resource);
+    try testing.expect(protobuf_data.len > 0);
+
+    // Decode the binary payload with the generated protobuf structs and
+    // validate every field, so a wrong tag number, field order, or type
+    // in the encoding fails this test instead of shipping silently.
+    var in: std.Io.Reader = .fixed(protobuf_data);
+    const decoded = try logs_v1.LogsData.decode(&in, arena.allocator());
+
+    // One resource, one scope, one log record.
+    try testing.expectEqual(@as(usize, 1), decoded.resource_logs.items.len);
+    const resource_logs = decoded.resource_logs.items[0];
+    try testing.expect(resource_logs.resource != null);
+    try testing.expectEqual(@as(usize, 1), resource_logs.scope_logs.items.len);
+
+    const scope_logs = resource_logs.scope_logs.items[0];
+    try testing.expect(scope_logs.scope != null);
+    try testing.expectEqual(@as(usize, 1), scope_logs.log_records.items.len);
+
+    const decoded_record = scope_logs.log_records.items[0];
+    try testing.expectEqual(@as(u64, 1000000000), decoded_record.time_unix_nano);
+    // observed_time defaults to the record timestamp when not set.
+    try testing.expectEqual(@as(u64, 1000000000), decoded_record.observed_time_unix_nano);
+    try testing.expectEqual(logs_v1.SeverityNumber.SEVERITY_NUMBER_INFO, decoded_record.severity_number);
+    try testing.expectEqualStrings("INFO", decoded_record.severity_text);
+
+    // Body: AnyValue string variant with the exact message.
+    try testing.expect(decoded_record.body != null);
+    if (decoded_record.body) |body| {
+        try testing.expectEqualStrings("test message", body.value.?.string_value);
+    }
+
+    // Trace/span IDs round-trip byte-exact.
+    try testing.expectEqualSlices(u8, &trace_id_bytes, decoded_record.trace_id);
+    try testing.expectEqualSlices(u8, &span_id_bytes, decoded_record.span_id);
+
+    // Attributes: exact keys, values, and AnyValue variants.
+    try testing.expectEqual(@as(usize, 2), decoded_record.attributes.items.len);
+    const attr0 = decoded_record.attributes.items[0];
+    try testing.expectEqualStrings("test.key", attr0.key);
+    try testing.expectEqualStrings("test.value", attr0.value.?.value.?.string_value);
+    const attr1 = decoded_record.attributes.items[1];
+    try testing.expectEqualStrings("test.number", attr1.key);
+    try testing.expectEqual(@as(i64, 42), attr1.value.?.value.?.int_value);
+
+    // No dropped attributes on the wire.
+    try testing.expectEqual(@as(u32, 0), decoded_record.dropped_attributes_count);
+}
