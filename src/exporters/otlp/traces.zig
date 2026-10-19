@@ -150,7 +150,7 @@ pub const OtlpTraceExporter = struct {
                 try traces_data.encode(&buffer.writer, allocator);
                 break :encoded try buffer.toOwnedSlice();
             },
-            .http_json => try traces_data.jsonEncode(.{}, allocator),
+            .http_json => try traces_data.jsonEncode(.{}, .{}, allocator),
             .grpc => unreachable,
         };
         defer allocator.free(encoded);
@@ -414,8 +414,8 @@ fn testSpan(name: []const u8) otel_sdk.trace.SpanData {
         .name = name,
         .kind = .internal,
         .status = .{ .code = .ok },
-        .start_time = 1,
-        .end_time = 2,
+        .start_time = std.Io.Timestamp.zero,
+        .end_time = .{ .nanoseconds = 2 },
         .attributes = &.{},
         .events = &.{},
         .links = &.{},
