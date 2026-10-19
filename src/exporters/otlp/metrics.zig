@@ -492,8 +492,8 @@ test "OTLP metric protobuf bytes are stable" {
             .type = .sum,
             .data_points = &[_]otel_sdk.metrics.MetricDataPoint{.{
                 .attributes = &point_attrs,
-                .timestamp_ns = 1_700_000_000_000_000_000,
-                .start_timestamp_ns = 1_699_999_000_000_000_000,
+                .timestamp = std.Io.Timestamp.fromNanoseconds(1_700_000_000_000_000_000),
+                .start_timestamp = std.Io.Timestamp.fromNanoseconds(1_699_999_000_000_000_000),
                 .value = .{ .i64_sum = 42 },
             }},
         },
@@ -506,8 +506,8 @@ test "OTLP metric protobuf bytes are stable" {
             .type = .gauge,
             .data_points = &[_]otel_sdk.metrics.MetricDataPoint{.{
                 .attributes = &point_attrs,
-                .timestamp_ns = 1_700_000_000_000_000_000,
-                .start_timestamp_ns = null,
+                .timestamp = std.Io.Timestamp.fromNanoseconds(1_700_000_000_000_000_000),
+                .start_timestamp = null,
                 .value = .{ .f64_gauge = 3.5 },
             }},
         },
@@ -520,8 +520,8 @@ test "OTLP metric protobuf bytes are stable" {
             .type = .histogram,
             .data_points = &[_]otel_sdk.metrics.MetricDataPoint{.{
                 .attributes = &point_attrs,
-                .timestamp_ns = 1_700_000_000_000_000_000,
-                .start_timestamp_ns = 1_699_999_000_000_000_000,
+                .timestamp = std.Io.Timestamp.fromNanoseconds(1_700_000_000_000_000_000),
+                .start_timestamp = std.Io.Timestamp.fromNanoseconds(1_699_999_000_000_000_000),
                 .value = .{ .f64_histogram = .{
                     .count = 6,
                     .sum = 25.5,

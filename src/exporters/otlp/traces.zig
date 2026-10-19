@@ -689,8 +689,8 @@ test "OTLP trace protobuf bytes are stable" {
     };
     span.kind = .server;
     span.status = .{ .code = .@"error", .description = "upstream unavailable" };
-    span.start_time = 1_700_000_000_000_000_000;
-    span.end_time = 1_700_000_000_250_000_000;
+    span.start_time = std.Io.Timestamp.fromNanoseconds(1_700_000_000_000_000_000);
+    span.end_time = std.Io.Timestamp.fromNanoseconds(1_700_000_000_250_000_000);
     span.attributes = &span_attributes;
     const resource_attributes = [_]otel_api.common.AttributeKeyValue{
         .{ .key = "service.name", .value = .{ .string = "golden" } },

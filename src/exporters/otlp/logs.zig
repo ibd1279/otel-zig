@@ -675,7 +675,7 @@ test "OTLP log protobuf bytes are stable" {
         .{ .key = "service.name", .value = .{ .string = "golden" } },
     };
     const record = LogRecord{
-        .timestamp_ns = 1_700_000_000_000_000_000,
+        .timestamp = std.Io.Timestamp.fromNanoseconds(1_700_000_000_000_000_000),
         .severity_number = .warn,
         .body = .{ .string = "disk nearly full" },
         .attributes = &[_]api.common.AttributeKeyValue{
@@ -684,7 +684,7 @@ test "OTLP log protobuf bytes are stable" {
             .{ .key = "degraded", .value = .{ .bool = true } },
         },
     };
-    var exporter = OtlpLogExporter.init(allocator, .{ .transport = .http_protobuf });
+    var exporter = OtlpLogExporter.init(allocator, .{ .io = std.testing.io, .transport = .http_protobuf });
     const bytes = try exporter.convertToProtobufFormat(allocator, &[_]LogRecord{record}, .{ .attributes = &resource_attributes });
 
     const hex = try std.fmt.allocPrint(allocator, "{x}", .{bytes});
