@@ -484,6 +484,8 @@ test "OtlpLogExporter protobuf binary round-trip decode and field validation" {
         },
         .trace_id = api.common.TraceId.fromBytes(trace_id_bytes),
         .span_id = api.common.SpanId.fromBytes(span_id_bytes),
+        .event_name = "test.event",
+        .flags = 0x01,
     };
 
     var arena = std.heap.ArenaAllocator.init(allocator);
@@ -517,6 +519,8 @@ test "OtlpLogExporter protobuf binary round-trip decode and field validation" {
     try testing.expectEqual(@as(u64, 1000000000), decoded_record.observed_time_unix_nano);
     try testing.expectEqual(logs_v1.SeverityNumber.SEVERITY_NUMBER_INFO, decoded_record.severity_number);
     try testing.expectEqualStrings("INFO", decoded_record.severity_text);
+    try testing.expectEqualStrings("test.event", decoded_record.event_name);
+    try testing.expectEqual(@as(u32, 0x01), decoded_record.flags);
 
     // Body: AnyValue string variant with the exact message.
     try testing.expect(decoded_record.body != null);
@@ -537,6 +541,88 @@ test "OtlpLogExporter protobuf binary round-trip decode and field validation" {
     try testing.expectEqualStrings("test.number", attr1.key);
     try testing.expectEqual(@as(i64, 42), attr1.value.?.value.?.int_value);
 
-    // No dropped attributes on the wire.
+    // No dropped attributes on the wire. Note this is documentation only:
+    // the converter hardcodes 0 and nothing maps to it, so this cannot
+    // catch a regression.
     try testing.expectEqual(@as(u32, 0), decoded_record.dropped_attributes_count);
+}
+
+test "OtlpLogExporter severity_text passthrough documents converter gap" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const resource = try Resource.initOwned(allocator, .default);
+    defer resource.deinitOwned(allocator);
+
+    // KNOWN CONVERTER GAP (pre-existing, not testable away here):
+    // LogRecord.severity_text is a real optional field, but
+    // convertLogRecordToProtobuf always writes severity_number.toShortText()
+    // and never reads record.severity_text. A user-supplied severity_text is
+    // silently dropped on the wire. This test pins the *current* behavior so
+    // a future fix flips it deliberately; when the converter is fixed, update
+    // the expected string to "warn-level".
+    const log_record = LogRecord{
+        .timestamp = std.Io.Timestamp.fromNanoseconds(1000000000),
+        .severity_number = .warn,
+        .severity_text = "warn-level",
+        .body = .{ .string = "test message" },
+    };
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var exporter = OtlpLogExporter.init(allocator, .{ .io = std.testing.io, .transport = .http_protobuf });
+    const protobuf_data = try exporter.convertToProtobufFormat(arena.allocator(), &[_]LogRecord{log_record}, resource);
+
+    var in: std.Io.Reader = .fixed(protobuf_data);
+    const decoded = try logs_v1.LogsData.decode(&in, arena.allocator());
+    const decoded_record = decoded.resource_logs.items[0].scope_logs.items[0].log_records.items[0];
+
+    try testing.expectEqual(logs_v1.SeverityNumber.SEVERITY_NUMBER_WARN, decoded_record.severity_number);
+    try testing.expectEqualStrings("WARN", decoded_record.severity_text);
+}
+
+test "OtlpLogExporter severity mapping covers all spec levels" {
+    const testing = std.testing;
+
+    const Case = struct { severity: api.logs.Severity, expected: logs_v1.SeverityNumber };
+    const cases = [_]Case{
+        .{ .severity = .invalid, .expected = .SEVERITY_NUMBER_UNSPECIFIED },
+        .{ .severity = .trace, .expected = .SEVERITY_NUMBER_TRACE },
+        .{ .severity = .trace2, .expected = .SEVERITY_NUMBER_TRACE2 },
+        .{ .severity = .trace3, .expected = .SEVERITY_NUMBER_TRACE3 },
+        .{ .severity = .trace4, .expected = .SEVERITY_NUMBER_TRACE4 },
+        .{ .severity = .debug, .expected = .SEVERITY_NUMBER_DEBUG },
+        .{ .severity = .debug2, .expected = .SEVERITY_NUMBER_DEBUG2 },
+        .{ .severity = .debug3, .expected = .SEVERITY_NUMBER_DEBUG3 },
+        .{ .severity = .debug4, .expected = .SEVERITY_NUMBER_DEBUG4 },
+        .{ .severity = .info, .expected = .SEVERITY_NUMBER_INFO },
+        .{ .severity = .info2, .expected = .SEVERITY_NUMBER_INFO2 },
+        .{ .severity = .info3, .expected = .SEVERITY_NUMBER_INFO3 },
+        .{ .severity = .info4, .expected = .SEVERITY_NUMBER_INFO4 },
+        .{ .severity = .warn, .expected = .SEVERITY_NUMBER_WARN },
+        .{ .severity = .warn2, .expected = .SEVERITY_NUMBER_WARN2 },
+        .{ .severity = .warn3, .expected = .SEVERITY_NUMBER_WARN3 },
+        .{ .severity = .warn4, .expected = .SEVERITY_NUMBER_WARN4 },
+        .{ .severity = .@"error", .expected = .SEVERITY_NUMBER_ERROR },
+        .{ .severity = .error2, .expected = .SEVERITY_NUMBER_ERROR2 },
+        .{ .severity = .error3, .expected = .SEVERITY_NUMBER_ERROR3 },
+        .{ .severity = .error4, .expected = .SEVERITY_NUMBER_ERROR4 },
+        .{ .severity = .fatal, .expected = .SEVERITY_NUMBER_FATAL },
+        .{ .severity = .fatal2, .expected = .SEVERITY_NUMBER_FATAL2 },
+        .{ .severity = .fatal3, .expected = .SEVERITY_NUMBER_FATAL3 },
+        .{ .severity = .fatal4, .expected = .SEVERITY_NUMBER_FATAL4 },
+    };
+
+    for (cases) |case| {
+        const mapped = mapSeverityToProtobuf(case.severity);
+        try testing.expectEqual(case.expected, mapped);
+        // The numeric value must equal the API severity's own spec number
+        // (trace=1..4, debug=5..8, info=9..12, warn=13..16, error=17..20,
+        // fatal=21..24). This catches arm-level typos like
+        // .warn2 => .SEVERITY_NUMBER_WARN3 that a tag-only check misses.
+        if (case.severity != .invalid) {
+            try testing.expectEqual(@intFromEnum(case.severity), @intFromEnum(mapped));
+        }
+    }
 }
