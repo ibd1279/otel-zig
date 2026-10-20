@@ -45,6 +45,9 @@
         .httpx = .{
             .url = "git+https://github.com/muhammad-fiaz/httpx.zig#deacfacea9a83c060d65ad65da1e40fa2edadc43",
             .hash = "httpx-0.2.2-8qj2elvJGAGEGluJssHtz2AqxReKPa_LjDxnygVfefMq",
+            // Lazy: only fetched when `-Dotlp-httpx` resolves it via
+            // b.lazyDependency(...); a default build fetches nothing.
+            .lazy = true,
         },
     },
     .paths = .{

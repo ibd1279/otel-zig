@@ -76,9 +76,11 @@ pub fn build(b: *std.Build) void {
     // ========================================================================
     // `-Dotlp-httpx` swaps the OTLP/HTTP transport to the httpx.zig-backed
     // variant (`src/exporters/otlp/transport_httpx.zig`). The httpx
-    // dependency is only RESOLVED when the option is on, so a default build
-    // fetches and compiles zero httpx code; the dependency set is otherwise
-    // unchanged.
+    // dependency is LAZILY resolved via `b.lazyDependency(...)`, and only
+    // inside the option-on branch, so a default build performs zero httpx
+    // fetches/resolutions at package-resolution time; the dependency set is
+    // otherwise unchanged. The `build.zig.zon` entry stays — it must exist
+    // for the lazy resolution to find it.
     const use_httpx_transport = b.option(
         bool,
         "otlp-httpx",
@@ -88,11 +90,16 @@ pub fn build(b: *std.Build) void {
     transport_build_options.addOption(bool, "otlp_httpx", use_httpx_transport);
     otel_exporters_mod.addImport("build_options", transport_build_options.createModule());
     if (use_httpx_transport) {
-        const httpx_dep = b.dependency("httpx", .{
+        // Never reached on a default build: lazyDependency is only called
+        // when the option is on, so nothing is fetched/resolved otherwise.
+        // A null return means the package isn't fetched yet: the build
+        // system records the need, fetches it, and re-runs build.zig.
+        if (b.lazyDependency("httpx", .{
             .target = target,
             .optimize = optimize,
-        });
-        otel_exporters_mod.addImport("httpx", httpx_dep.module("httpx"));
+        })) |httpx_dep| {
+            otel_exporters_mod.addImport("httpx", httpx_dep.module("httpx"));
+        }
     }
 
     // ========================================================================
