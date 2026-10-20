@@ -23,6 +23,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/sdk/root.zig"),
         .target = target,
         .optimize = optimize,
+        // link_libc is required on 0.17: std.c.getenv is the only environment
+        // access left (std.posix.getenv was removed; non-libc programs get an
+        // empty environ). If the OTEL_* env feature is ever dropped or moved
+        // to main(), this can go away and the SDK becomes pure Zig on Linux
+        // (process.pid already uses the raw syscall there).
         .link_libc = true,
     });
     otel_sdk_mod.addImport("otel-api", otel_api_mod);

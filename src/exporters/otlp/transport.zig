@@ -24,7 +24,7 @@ pub const Response = struct {
 /// already names the signal (`append_signal_path = false`) is used as is.
 pub fn signalUrl(allocator: std.mem.Allocator, config: OtlpExporterConfig, signal_path: []const u8) ![]u8 {
     if (!config.append_signal_path) return allocator.dupe(u8, config.endpoint);
-    return joinSignalPath(allocator, config.endpoint, signal_path);
+    return joinSignalPathWithOtlpPort(allocator, config.endpoint, signal_path);
 }
 
 pub fn joinSignalPath(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8) ![]u8 {
@@ -33,6 +33,39 @@ pub fn joinSignalPath(allocator: std.mem.Allocator, endpoint: []const u8, path: 
         std.mem.trimEnd(u8, endpoint, "/"),
         std.mem.trimStart(u8, path, "/"),
     });
+}
+
+/// Like `joinSignalPath`, but ports the trunk behavior of defaulting a
+/// port-less authority to the OTLP/HTTP port (4318) instead of letting
+/// std.http fall back to the scheme default (80/443) — a port-less
+/// `http://collector` must reach :4318.
+fn joinSignalPathWithOtlpPort(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8) ![]u8 {
+    const trimmed = std.mem.trimEnd(u8, endpoint, "/");
+    const authority = defaultOtlpAuthority(trimmed) orelse trimmed;
+    if (path.len == 0) return allocator.dupe(u8, authority);
+    return std.fmt.allocPrint(allocator, "{s}/{s}", .{
+        authority,
+        std.mem.trimStart(u8, path, "/"),
+    });
+}
+
+/// Returns the endpoint with `:4318` inserted when the URL has an authority
+/// without an explicit port, else null (nothing to fix).
+fn defaultOtlpAuthority(endpoint: []const u8) ?[]const u8 {
+    const scheme_end = std.mem.indexOf(u8, endpoint, "://") orelse return null;
+    var authority_start = scheme_end + 3;
+    // Skip userinfo: the port separator we look for comes after any '@'.
+    if (std.mem.lastIndexOfScalar(u8, endpoint[authority_start..], '@')) |at| {
+        authority_start += at + 1;
+    }
+    var authority_end = authority_start;
+    while (authority_end < endpoint.len and endpoint[authority_end] != '/' and endpoint[authority_end] != '?' and endpoint[authority_end] != '#') : (authority_end += 1) {}
+    const authority = endpoint[authority_start..authority_end];
+    if (std.mem.indexOfScalar(u8, authority, ':') != null) return null; // explicit port (or IPv6 literal, which must carry one)
+    return std.fmt.allocPrint(std.heap.page_allocator, "{s}:4318{s}", .{
+        endpoint[0..authority_end],
+        endpoint[authority_end..],
+    }) catch null;
 }
 
 /// POST `payload` to `url`, retrying retryable failures within the budget
@@ -284,4 +317,16 @@ test "signal url preserves configured paths" {
     const fixed = try signalUrl(testing.allocator, .{ .io = std.testing.io, .endpoint = "https://x/only-logs", .append_signal_path = false }, "/v1/logs");
     defer testing.allocator.free(fixed);
     try testing.expectEqualStrings("https://x/only-logs", fixed);
+}
+
+test "port-less endpoint defaults to the OTLP HTTP port 4318" {
+    const testing = std.testing;
+    const defaulted = try signalUrl(testing.allocator, .{ .io = std.testing.io, .endpoint = "http://collector.example" }, "/v1/traces");
+    defer testing.allocator.free(defaulted);
+    try testing.expectEqualStrings("http://collector.example:4318/v1/traces", defaulted);
+
+    // An endpoint that already carries a port is untouched.
+    const with_port = try signalUrl(testing.allocator, .{ .io = std.testing.io, .endpoint = "http://collector.example:4319/base" }, "/v1/traces");
+    defer testing.allocator.free(with_port);
+    try testing.expectEqualStrings("http://collector.example:4319/base/v1/traces", with_port);
 }

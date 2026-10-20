@@ -331,13 +331,41 @@ pub const BatchSpanProcessor = struct {
         var result: ExportResult = .success;
         var offset: usize = 0;
         while (offset < items.len) {
-            const count = @min(batch.len, items.len - offset);
-            for (items[offset .. offset + count], 0..) |item, i| batch[i] = item.data;
-            const current = exporter.exportSpans(batch[0..count], items[offset].resource);
-            if (!current.isSuccess()) result = current;
-            offset += count;
+            // Export runs of spans sharing the same resource. The queue is
+            // per-span-resourced (QueuedSpan), and one processor instance can
+            // be registered with providers that have different resources;
+            // batching across different resources would misattribute spans
+            // (wrong service.name et al. downstream). Resource identity here
+            // is the (attributes, schema_url) pointer pair: resources from one
+            // provider share the same backing slices.
+            const run_resource = items[offset].resource;
+            var run_end = offset + 1;
+            while (run_end < items.len and sameResource(items[run_end].resource, run_resource)) run_end += 1;
+
+            var run_offset = offset;
+            while (run_offset < run_end) {
+                const count = @min(batch.len, run_end - run_offset);
+                for (items[run_offset .. run_offset + count], 0..) |item, i| batch[i] = item.data;
+                const current = exporter.exportSpans(batch[0..count], run_resource);
+                if (!current.isSuccess()) result = current;
+                run_offset += count;
+            }
+            offset = run_end;
         }
         return result;
+    }
+
+    /// Cheap identity check for resources: same backing attribute slice and
+    /// schema_url. Resource values are copies of a provider-owned struct, so
+    /// equal slices mean the same resource.
+    fn sameResource(a: sdk.Resource, b: sdk.Resource) bool {
+        if (a.attributes.ptr != b.attributes.ptr or a.attributes.len != b.attributes.len) return false;
+        if ((a.schema_url == null) != (b.schema_url == null)) return false;
+        if (a.schema_url) |a_url| {
+            const b_url = b.schema_url.?;
+            return a_url.ptr == b_url.ptr and a_url.len == b_url.len;
+        }
+        return true;
     }
 
     /// Background thread function that periodically exports spans
