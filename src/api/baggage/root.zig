@@ -27,6 +27,7 @@ const std = @import("std");
 // Re-export baggage types
 pub const BaggageKeyValue = @import("baggage.zig").BaggageKeyValue;
 pub const BaggageBuilder = @import("baggage.zig").BaggageBuilder;
+pub const BaggagePropagator = @import("propagator.zig").BaggagePropagator;
 
 // Re-export factory functions
 

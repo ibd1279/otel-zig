@@ -32,11 +32,14 @@ const processor_zig = @import("processor.zig");
 const SpanProcessor = processor_zig.SpanProcessor;
 const BridgeSpanProcessor = processor_zig.BridgeSpanProcessor;
 
+const QueuedSpan = struct { resource: sdk.Resource, data: sdk.trace.SpanData };
+
 /// Configuration for BatchSpanProcessor PipelineStep
 pub const BatchConfig = struct {
     io: ?std.Io = null,
     export_interval_ms: ?u32 = null,
     max_queue_size: ?usize = null,
+    max_export_batch_size: ?usize = null,
 };
 
 /// Batch span processor that exports spans at regular intervals
@@ -73,7 +76,8 @@ pub const BatchSpanProcessor = struct {
     shutdown_signal: std.Io.Event,
     export_interval_ms: u32,
     max_queue_size: usize,
-    span_queue: std.ArrayList(struct { resource: sdk.Resource, data: sdk.trace.SpanData }),
+    max_export_batch_size: usize,
+    span_queue: std.ArrayList(QueuedSpan),
 
     /// Initialize a new batch span processor
     /// export_interval_ms: How often to export spans (default: 5000ms = 5s)
@@ -102,6 +106,7 @@ pub const BatchSpanProcessor = struct {
             .shutdown_signal = .unset,
             .export_interval_ms = config.export_interval_ms orelse 5000,
             .max_queue_size = config.max_queue_size orelse 2048,
+            .max_export_batch_size = @max(1, @min(config.max_export_batch_size orelse 512, config.max_queue_size orelse 2048)),
             .span_queue = .empty,
         };
     }
@@ -175,21 +180,21 @@ pub const BatchSpanProcessor = struct {
 
     /// Called when a span ends - adds span to batch queue
     pub fn onEnd(self: *BatchSpanProcessor, span: sdk.trace.SpanData, resource: sdk.Resource) void {
-        self.mutex.lockUncancelable(self.io);
-        defer self.mutex.unlock(self.io);
-
+        // Fast pre-check without the lock; a racing shutdown is re-checked below.
         if (self.is_shutdown.load(.acquire)) {
             return;
         }
 
-        // Drop newest if queue is full
-        if (self.span_queue.items.len >= self.max_queue_size) {
-            return;
-        }
-
-        // Clone span for queuing (original will be deinitialized by caller)
+        // Clone the span BEFORE taking the lock. initOwned is the expensive part
+        // of onEnd: a deep heap copy of the span name and every attribute (which
+        // for DB/HTTP instrumentation includes large SQL/URL strings). Cloning
+        // under the mutex serializes every concurrent onEnd — and with many
+        // request threads on few cores, a thread preempted mid-copy stalls all
+        // the others. That lock convoy turns a flood of sub-millisecond spans
+        // into multi-second tail latency (observed downstream: 14 spans/request
+        // × 24 concurrent requests → seconds of inter-span gaps). Cloning first
+        // keeps the critical section to a capacity check plus a pointer append.
         const cloned_span = sdk.trace.SpanData.initOwned(self.allocator, span) catch |err| {
-            // Log error instead of silent drop
             error_handler.reportError(.{
                 .component = .processor,
                 .operation = "span_clone",
@@ -201,10 +206,19 @@ pub const BatchSpanProcessor = struct {
             return;
         };
 
-        // Add cloned span to queue
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+
+        // Re-check under the lock: shutdown may have raced us, and the queue may
+        // have filled while we were cloning. Free the clone in either case so it
+        // is not leaked (the caller still owns and deinits the original `span`).
+        if (self.is_shutdown.load(.acquire) or self.span_queue.items.len >= self.max_queue_size) {
+            cloned_span.deinitOwned(self.allocator);
+            return;
+        }
+
         self.span_queue.append(self.allocator, .{ .resource = resource, .data = cloned_span }) catch |err| {
             cloned_span.deinitOwned(self.allocator);
-            // Log queue overflow
             error_handler.reportError(.{
                 .component = .processor,
                 .operation = "queue_append",
@@ -215,6 +229,11 @@ pub const BatchSpanProcessor = struct {
             });
             return;
         };
+        // Wake the background thread early: a threshold-sized batch has queued
+        // up, so it should export before the next interval tick. Reuses the
+        // generic wake event (also used for shutdown) — the thread re-checks
+        // is_shutdown after every wait.
+        if (self.span_queue.items.len >= self.max_export_batch_size) self.shutdown_signal.set(self.io);
     }
 
     /// Force export all queued spans immediately
@@ -242,15 +261,13 @@ pub const BatchSpanProcessor = struct {
             };
 
             self.mutex.unlock(self.io);
-            if (self.exporter) |exporter| {
-                for (spans_to_export) |data_pair| {
-                    _ = exporter.exportSpans(&.{data_pair.data}, data_pair.resource);
-                }
-            }
-            for (spans_to_export) |data_pair| {
-                data_pair.data.deinitOwned(self.allocator);
-            }
-            self.allocator.free(spans_to_export);
+            // Chunked export (max_export_batch_size per call) via the same
+            // helper the background thread uses, so the exporter sees
+            // identical batching regardless of who drains the queue.
+            // Flush still runs below; a failed batch export surfaces there
+            // or as an error report — forceFlush's contract is the exporter's
+            // own result, matching the pre-chunking behavior.
+            _ = self.exportOwned(spans_to_export);
             self.mutex.lockUncancelable(self.io);
         }
 
@@ -277,31 +294,78 @@ pub const BatchSpanProcessor = struct {
         return result.asFlushResult().asProcessResult();
     }
 
-    /// Export all queued spans (must be called with mutex held)
-    fn exportBatchLocked(self: *BatchSpanProcessor) void {
+    /// Export all queued spans, releasing the mutex during HTTP export.
+    /// Must be called with mutex held. Mutex is held again on return.
+    fn exportBatchUnlocked(self: *BatchSpanProcessor) void {
         if (self.is_shutdown.load(.acquire) or self.span_queue.items.len == 0) {
             return;
         }
 
-        // Export all queued spans
-        if (self.exporter) |exporter| {
-            for (self.span_queue.items) |item| {
-                _ = exporter.exportSpans(&.{item.data}, item.resource);
-            }
-        }
+        // Drain queue under the lock
+        const spans_to_export = self.span_queue.toOwnedSlice(self.allocator) catch return;
 
-        // Clean up exported spans
-        for (self.span_queue.items) |span| {
-            span.data.deinitOwned(self.allocator);
-        }
-        self.span_queue.clearRetainingCapacity();
+        // Release mutex during export — HTTP calls can take seconds
+        self.mutex.unlock(self.io);
+
+        _ = self.exportOwned(spans_to_export);
+
+        // Re-acquire mutex before returning
+        self.mutex.lockUncancelable(self.io);
     }
 
     /// Export all queued spans (acquires mutex)
     fn exportBatch(self: *BatchSpanProcessor) void {
         self.mutex.lockUncancelable(self.io);
         defer self.mutex.unlock(self.io);
-        self.exportBatchLocked();
+        self.exportBatchUnlocked();
+    }
+
+    fn exportOwned(self: *BatchSpanProcessor, items: []QueuedSpan) ExportResult {
+        defer {
+            for (items) |item| item.data.deinitOwned(self.allocator);
+            self.allocator.free(items);
+        }
+        const exporter = self.exporter orelse return .success;
+        const batch = self.allocator.alloc(sdk.trace.SpanData, @min(items.len, self.max_export_batch_size)) catch return .failure;
+        defer self.allocator.free(batch);
+        var result: ExportResult = .success;
+        var offset: usize = 0;
+        while (offset < items.len) {
+            // Export runs of spans sharing the same resource. The queue is
+            // per-span-resourced (QueuedSpan), and one processor instance can
+            // be registered with providers that have different resources;
+            // batching across different resources would misattribute spans
+            // (wrong service.name et al. downstream). Resource identity here
+            // is the (attributes, schema_url) pointer pair: resources from one
+            // provider share the same backing slices.
+            const run_resource = items[offset].resource;
+            var run_end = offset + 1;
+            while (run_end < items.len and sameResource(items[run_end].resource, run_resource)) run_end += 1;
+
+            var run_offset = offset;
+            while (run_offset < run_end) {
+                const count = @min(batch.len, run_end - run_offset);
+                for (items[run_offset .. run_offset + count], 0..) |item, i| batch[i] = item.data;
+                const current = exporter.exportSpans(batch[0..count], run_resource);
+                if (!current.isSuccess()) result = current;
+                run_offset += count;
+            }
+            offset = run_end;
+        }
+        return result;
+    }
+
+    /// Cheap identity check for resources: same backing attribute slice and
+    /// schema_url. Resource values are copies of a provider-owned struct, so
+    /// equal slices mean the same resource.
+    fn sameResource(a: sdk.Resource, b: sdk.Resource) bool {
+        if (a.attributes.ptr != b.attributes.ptr or a.attributes.len != b.attributes.len) return false;
+        if ((a.schema_url == null) != (b.schema_url == null)) return false;
+        if (a.schema_url) |a_url| {
+            const b_url = b.schema_url.?;
+            return a_url.ptr == b_url.ptr and a_url.len == b_url.len;
+        }
+        return true;
     }
 
     /// Background thread function that periodically exports spans
@@ -327,7 +391,8 @@ pub const BatchSpanProcessor = struct {
                 self.export_complete.broadcast(self.io);
             }
 
-            // Do the export
+            // Do the export — exportBatch drains the queue under the lock and
+            // releases the mutex during HTTP export (same pattern as forceFlush).
             self.exportBatch();
         }
     }
@@ -424,6 +489,88 @@ test "BatchSpanProcessor - span queuing and export" {
     processor.mutex.lockUncancelable(processor.io);
     try testing.expectEqual(@as(usize, 0), processor.span_queue.items.len);
     processor.mutex.unlock(processor.io);
+}
+
+test "BatchSpanProcessor exports bounded batches" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const mock_exporter = try allocator.create(MockSpanExporter);
+    mock_exporter.* = MockSpanExporter.init(allocator);
+    const processor = try allocator.create(BatchSpanProcessor);
+    processor.* = BatchSpanProcessor.init(std.testing.io, allocator, mock_exporter.spanExporter(), .{
+        .export_interval_ms = 1_000_000,
+        .max_queue_size = 10,
+        .max_export_batch_size = 2,
+    });
+
+    const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
+    defer provider.deinit();
+    try provider.registerProcessor(processor.spanProcessor());
+    const tracer = provider.getTracerWithScope(.empty);
+
+    for (0..5) |_| {
+        var span = tracer.startSpan("batched-span", .{}, &.{});
+        span.end(null);
+        span.deinit();
+    }
+    try testing.expectEqual(otel_api.common.FlushResult.success, processor.forceFlush(null));
+    try testing.expectEqual(@as(usize, 5), mock_exporter.spanCount());
+    try testing.expectEqual(@as(usize, 3), mock_exporter.exportCallCount());
+}
+
+test "BatchSpanProcessor threshold wakes exporter before schedule" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    const mock_exporter = try allocator.create(MockSpanExporter);
+    mock_exporter.* = MockSpanExporter.init(allocator);
+    const processor = try allocator.create(BatchSpanProcessor);
+    processor.* = BatchSpanProcessor.init(std.testing.io, allocator, mock_exporter.spanExporter(), .{
+        .export_interval_ms = 60_000,
+        .max_queue_size = 10,
+        .max_export_batch_size = 2,
+    });
+
+    const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
+    defer provider.deinit();
+    try provider.registerProcessor(processor.spanProcessor());
+    try processor.start();
+    const tracer = provider.getTracerWithScope(.empty);
+
+    for (0..2) |_| {
+        var span = tracer.startSpan("threshold-span", .{}, &.{});
+        span.end(null);
+        span.deinit();
+    }
+    const deadline = std.Io.Timestamp.now(std.testing.io, .real).nanoseconds + 500 * std.time.ns_per_ms;
+    while (mock_exporter.exportCallCount() == 0 and std.Io.Timestamp.now(std.testing.io, .real).nanoseconds < deadline) {
+        std.testing.io.sleep(.{ .nanoseconds = std.time.ns_per_ms }, .real) catch {};
+    }
+    try testing.expect(mock_exporter.exportCallCount() > 0);
+    try testing.expectEqual(otel_api.common.FlushResult.success, processor.forceFlush(1000));
+    try testing.expectEqual(@as(usize, 2), mock_exporter.spanCount());
+}
+
+test "BatchSpanProcessor force flush timeout bounds an in-progress export wait" {
+    const testing = std.testing;
+    const processor = try testing.allocator.create(BatchSpanProcessor);
+    processor.* = BatchSpanProcessor.init(std.testing.io, testing.allocator, null, .{});
+    defer {
+        processor.export_in_progress.store(false, .release);
+        processor.export_complete.broadcast(std.testing.io);
+        processor.deinit();
+        processor.destroy();
+    }
+
+    processor.export_in_progress.store(true, .release);
+    const started = std.Io.Timestamp.now(std.testing.io, .awake).nanoseconds;
+    try testing.expectEqual(otel_api.common.FlushResult.timeout, processor.forceFlush(30));
+    const elapsed = std.Io.Timestamp.now(std.testing.io, .awake).nanoseconds - started;
+    try testing.expect(elapsed >= 20 * std.time.ns_per_ms);
+    try testing.expect(elapsed < 200 * std.time.ns_per_ms);
 }
 
 test "BatchSpanProcessor - queue overflow drops newest" {
@@ -654,4 +801,74 @@ test "BatchSpanProcessor - setExporter drains and frees old exporter" {
 
     try testing.expectEqual(otel_api.common.FlushResult.success, processor.forceFlush(null));
     try testing.expectEqual(@as(usize, 1), mock_exporter_2.spanCount());
+}
+
+test "BatchSpanProcessor - concurrent onEnd from many threads queues every span" {
+    // Regression for the onEnd lock convoy: many threads end spans at once, so
+    // onEnd's clone-then-lock path runs fully concurrently. Asserts every span
+    // is queued exactly once (no lost or double-counted spans) and — via the
+    // testing allocator — that no clone leaks on any path.
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var mock_error_handler = otel_api.common.MockErrorHandler.init(allocator);
+    defer mock_error_handler.deinit();
+    otel_api.common.setMockErrorHandler(&mock_error_handler);
+    defer otel_api.common.clearMockErrorHandler();
+
+    const mock_exporter = try allocator.create(MockSpanExporter);
+    mock_exporter.* = MockSpanExporter.init(allocator);
+
+    const processor = try allocator.create(BatchSpanProcessor);
+    // High interval + init() without start() means the export thread never
+    // drains; the queue must hold every span. Queue sized well above the total
+    // so none are dropped.
+    processor.* = BatchSpanProcessor.init(
+        std.testing.io,
+        allocator,
+        mock_exporter.spanExporter(),
+        .{ .export_interval_ms = 1_000_000, .max_queue_size = 4096 },
+    );
+    // Deliberately not calling processor.start(): no background drain.
+
+    const resource = try sdk.Resource.initOwned(allocator, .{ .attributes = &.{} });
+    var provider = @import("tracer_provider.zig").TracerProvider.init(allocator, std.testing.io, resource, .{ .random = try @import("id_generator.zig").RandomIdGenerator.init(std.testing.io) }, .keep);
+    defer provider.deinit();
+    try provider.registerProcessor(processor.spanProcessor());
+
+    const TracerProvider = @import("tracer_provider.zig").TracerProvider;
+    const N_THREADS = 8;
+    const SPANS_PER = 25;
+
+    const Worker = struct {
+        fn run(prov: *TracerProvider, alloc: std.mem.Allocator, ok: *std.atomic.Value(u32)) void {
+            const tracer = prov.getTracerWithScope(.empty);
+            const sc = otel_api.trace.Span.Context{
+                .trace_id = otel_api.common.TraceId{ .bytes = [_]u8{7} ** 16 },
+                .span_id = otel_api.common.SpanId{ .bytes = [_]u8{7} ** 8 },
+                .trace_flags = 0,
+                .trace_state = null,
+                .is_remote = false,
+            };
+            var i: usize = 0;
+            while (i < SPANS_PER) : (i += 1) {
+                const ctx = otel_api.trace.trace_context.withActiveSpanContext(alloc, &.{}, sc) catch return;
+                defer otel_api.ContextKeyValue.deinitOwnedSlice(alloc, ctx);
+                var span = tracer.startSpan("concurrent-span", .{}, ctx);
+                span.end(null); // calls onEnd on this thread
+                span.deinit();
+            }
+            _ = ok.fetchAdd(1, .monotonic);
+        }
+    };
+
+    var ok = std.atomic.Value(u32).init(0);
+    var threads: [N_THREADS]std.Thread = undefined;
+    for (&threads) |*t| t.* = try std.Thread.spawn(.{}, Worker.run, .{ &provider, allocator, &ok });
+    for (threads) |t| t.join();
+
+    try testing.expectEqual(@as(u32, N_THREADS), ok.load(.monotonic));
+    processor.mutex.lockUncancelable(std.testing.io);
+    defer processor.mutex.unlock(std.testing.io);
+    try testing.expectEqual(@as(usize, N_THREADS * SPANS_PER), processor.span_queue.items.len);
 }

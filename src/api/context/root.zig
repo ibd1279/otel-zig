@@ -19,6 +19,7 @@ pub const ContextValue = @import("context_key.zig").ContextValue;
 // Re-export propagation types
 pub const TextMapCarrier = @import("propagation.zig").TextMapCarrier;
 pub const TextMapPropagator = @import("propagation.zig").TextMapPropagator;
+pub const createW3cBaggagePropagator = @import("propagation.zig").createW3cBaggagePropagator;
 
 // Implicit thread-local context propagation
 pub const implicit = @import("implicit.zig");

@@ -23,6 +23,8 @@ pub const getGlobalLoggerProvider = provider_registry.getGlobalLoggerProvider;
 pub const getGlobalMeterProvider = provider_registry.getGlobalMeterProvider;
 pub const getGlobalTracerProvider = provider_registry.getGlobalTracerProvider;
 pub const getGlobalConfigProvider = provider_registry.getGlobalConfigProvider;
+pub const getGlobalTextMapPropagator = provider_registry.getGlobalTextMapPropagator;
+pub const setGlobalTextMapPropagator = provider_registry.setGlobalTextMapPropagator;
 
 test "api module compilation" {
     std.testing.refAllDecls(@This());

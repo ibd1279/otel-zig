@@ -9,13 +9,7 @@ pub fn build(b: *std.Build) void {
     // ========================================================================
     // Contains only interfaces, types, and noop implementations
     // This is what applications import for stable APIs
-    const otel_api_mod = b.createModule(.{
-        .root_source_file = b.path("src/api/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    _ = b.addModule("otel-api", .{
+    const otel_api_mod = b.addModule("otel-api", .{
         .root_source_file = b.path("src/api/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -25,21 +19,18 @@ pub fn build(b: *std.Build) void {
     // OpenTelemetry SDK Core Module
     // ========================================================================
     // Contains basic SDK implementations (loggers, providers, processors)
-    const otel_sdk_mod = b.createModule(.{
+    const otel_sdk_mod = b.addModule("otel-sdk", .{
         .root_source_file = b.path("src/sdk/root.zig"),
         .target = target,
         .optimize = optimize,
+        // link_libc is required while OTEL_* env support exists: std has no
+        // libc-free environment access (std.posix.getenv removed in 0.16;
+        // non-libc programs get an empty environ). process.pid uses the raw
+        // linux syscall — dropping or relocating env support to the
+        // application's main() would make the SDK pure Zig on Linux.
+        .link_libc = true,
     });
     otel_sdk_mod.addImport("otel-api", otel_api_mod);
-
-    _ = b.addModule("otel-sdk", .{
-        .root_source_file = b.path("src/sdk/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "otel-api", .module = otel_api_mod },
-        },
-    });
 
     // ========================================================================
     // OpenTelemetry protobuf generator
@@ -71,7 +62,7 @@ pub fn build(b: *std.Build) void {
     // ========================================================================
     // Contains concrete exporters (console, OTLP, etc.)
 
-    const otel_exporters_mod = b.createModule(.{
+    const otel_exporters_mod = b.addModule("otel-exporters", .{
         .root_source_file = b.path("src/exporters/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -80,28 +71,11 @@ pub fn build(b: *std.Build) void {
     otel_exporters_mod.addImport("otel-sdk", otel_sdk_mod);
     otel_exporters_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
 
-    _ = b.addModule("otel-exporters", .{
-        .root_source_file = b.path("src/exporters/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "otel-api", .module = otel_api_mod },
-            .{ .name = "otel-sdk", .module = otel_sdk_mod },
-            .{ .name = "protobuf", .module = protobuf_dep.module("protobuf") },
-        },
-    });
-
     // ========================================================================
     // OpenTelemetry Semantic Conventions Module
     // ========================================================================
     // Contains semantic conventions, can be used independently
-    const otel_semconv_mod = b.createModule(.{
-        .root_source_file = b.path("src/semconv/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    _ = b.addModule("otel-semconv", .{
+    const otel_semconv_mod = b.addModule("otel-semconv", .{
         .root_source_file = b.path("src/semconv/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -111,7 +85,7 @@ pub fn build(b: *std.Build) void {
     // Convenience "All-in-One" Module
     // ========================================================================
     // Re-exports everything for simple use cases
-    const otel_mod = b.createModule(.{
+    const otel_mod = b.addModule("otel", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -120,18 +94,6 @@ pub fn build(b: *std.Build) void {
     otel_mod.addImport("otel-sdk", otel_sdk_mod);
     otel_mod.addImport("otel-exporters", otel_exporters_mod);
     otel_mod.addImport("otel-semconv", otel_semconv_mod);
-
-    _ = b.addModule("otel", .{
-        .root_source_file = b.path("src/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "otel-api", .module = otel_api_mod },
-            .{ .name = "otel-sdk", .module = otel_sdk_mod },
-            .{ .name = "otel-exporters", .module = otel_exporters_mod },
-            .{ .name = "otel-semconv", .module = otel_semconv_mod },
-        },
-    });
 
     // ========================================================================
     // Libraries
@@ -173,19 +135,30 @@ pub fn build(b: *std.Build) void {
     // Tests
     // ========================================================================
 
+    // Zig 0.16.0's default self-hosted x86_64 backend segfaults (silently, no
+    // panic message) while compiling this project's test builds — see
+    // https://ziggit.dev/t/anyone-else-having-compiler-segfault-with-0-16-0-when-using-certain-libraries/15512.
+    // Forcing the LLVM backend works around it; non-test builds are unaffected.
+
     // API tests
     const api_unit_tests = b.addTest(.{
         .root_module = otel_api_mod,
+        .use_llvm = true,
     });
     const run_api_tests = b.addRunArtifact(api_unit_tests);
 
     // SDK tests
     const sdk_unit_tests = b.addTest(.{
         .root_module = otel_sdk_mod,
+        .use_llvm = true,
     });
     const run_sdk_tests = b.addRunArtifact(sdk_unit_tests);
 
     // Exporters tests
+    // NOTE: deliberately NOT `.use_llvm = true` — the LLVM backend needs far
+    // more RAM (protobuf codegen) and gets OOM-killed on memory-constrained
+    // machines, while the self-hosted backend compiles this target fine (the
+    // 0.16.0 backend SEGV only affects SDK-including test builds).
     const exporters_unit_tests = b.addTest(.{
         .root_module = otel_exporters_mod,
     });
@@ -194,6 +167,7 @@ pub fn build(b: *std.Build) void {
     // Integration tests
     const integration_tests = b.addTest(.{
         .root_module = otel_mod,
+        .use_llvm = true,
     });
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
@@ -204,6 +178,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = true,
     });
     async_observable_tests.root_module.addImport("otel-api", otel_api_mod);
     async_observable_tests.root_module.addImport("otel-sdk", otel_sdk_mod);
@@ -216,6 +191,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         }),
+        .use_llvm = true,
     });
     comprehensive_error_tests.root_module.addImport("otel-api", otel_api_mod);
     comprehensive_error_tests.root_module.addImport("otel-sdk", otel_sdk_mod);
@@ -386,6 +362,8 @@ pub fn build(b: *std.Build) void {
     const run_simple_trace_otlp = b.addRunArtifact(simple_trace_otlp_example);
     const simple_trace_otlp_step = b.step("example-simple-trace-otlp", "Run simple trace OTLP example");
     simple_trace_otlp_step.dependOn(&run_simple_trace_otlp.step);
+    const check_trace_otlp_step = b.step("check-trace-otlp", "Compile the OTLP trace pipeline without running it");
+    check_trace_otlp_step.dependOn(&simple_trace_otlp_example.step);
 
     // Error Handling Demo Example
     const error_handling_demo_example = b.addExecutable(.{

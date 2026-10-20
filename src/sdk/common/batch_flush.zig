@@ -61,7 +61,13 @@ pub fn performForceFlush(
     if (was_flushing) {
         while (self.flush_in_progress.load(.acquire)) {
             if (remainingMs(timeout_ms, start_time) == 0) return .timeout;
-            self.flush_complete.waitUncancelable(self.io, &self.mutex);
+            // Zig 0.16 conditions have no timed wait, and nothing is
+            // guaranteed to broadcast before the deadline expires, so a plain
+            // waitUncancelable here can deadlock (e.g. exporter wedged, no
+            // other waiter). Bounded sleep-poll re-checks the deadline.
+            self.mutex.unlock(self.io);
+            self.io.sleep(.{ .nanoseconds = 5 * std.time.ns_per_ms }, .awake) catch {};
+            self.mutex.lockUncancelable(self.io);
         }
         return .success;
     }
@@ -72,7 +78,11 @@ pub fn performForceFlush(
 
     while (self.export_in_progress.load(.acquire)) {
         if (remainingMs(timeout_ms, start_time) == 0) return .timeout;
-        self.export_complete.waitUncancelable(self.io, &self.mutex);
+        // Same bounded sleep-poll as above: the broadcast only comes from a
+        // concurrent exporter finishing, which may never happen.
+        self.mutex.unlock(self.io);
+        self.io.sleep(.{ .nanoseconds = 5 * std.time.ns_per_ms }, .awake) catch {};
+        self.mutex.lockUncancelable(self.io);
     }
     self.export_in_progress.store(true, .release);
     defer {

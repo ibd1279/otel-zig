@@ -7,16 +7,15 @@
 //! - Commercial APM solutions
 //!
 //! ## Transport Options
-//! OTLP exporters support two transport mechanisms:
-//! - **gRPC** - Binary protocol over HTTP/2 (default)
-//! - **HTTP** - JSON or Protobuf over HTTP/1.1
+//! The trace exporter supports HTTP with JSON or protobuf payloads. Its
+//! `grpc` transport value is reserved and currently returns an unsupported
+//! transport error.
 //!
 //! ## Configuration
 //! All OTLP exporters share common configuration:
 //! - `endpoint` - The OTLP receiver endpoint
 //! - `headers` - Additional headers for authentication
 //! - `timeout` - Request timeout
-//! - `retry_config` - Retry behavior for failed exports
 //!
 //! ## Usage
 //! ```zig
@@ -26,8 +25,9 @@
 //! });
 //! ```
 //!
-//! ## Status
-//! This is a placeholder implementation. Full OTLP support is planned for a future release.
+//! Trace exports honor endpoint paths, custom headers, gzip compression, and
+//! request timeouts. Log and metric exporter capabilities are documented by
+//! their respective modules.
 
 const std = @import("std");
 const otel_api = @import("otel-api");
@@ -69,6 +69,10 @@ pub const OtlpExporterConfig = struct {
 
     /// Request timeout in milliseconds
     timeout_millis: u64 = 10000,
+
+    /// Generic OTLP endpoints append the per-signal path; a traces-specific
+    /// endpoint is already complete and sets this false.
+    append_signal_path: bool = true,
 
     /// TLS configuration
     tls_config: ?TlsConfig = null,

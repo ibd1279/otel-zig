@@ -135,6 +135,7 @@ pub const MockSpanExporter = struct {
     /// Optional pointer to a caller-owned bool. When set, deinit() writes true
     /// through it so callers can observe cleanup without touching freed memory.
     deinit_notify: ?*bool,
+    export_calls: std.atomic.Value(usize),
 
     pub fn init(allocator: std.mem.Allocator) MockSpanExporter {
         return .{
@@ -144,6 +145,7 @@ pub const MockSpanExporter = struct {
             .flush_result = .success,
             .shutdown_result = .success,
             .deinit_notify = null,
+            .export_calls = .init(0),
         };
     }
 
@@ -159,6 +161,7 @@ pub const MockSpanExporter = struct {
 
     pub fn exportSpans(self: *MockSpanExporter, spans: []const SpanData, resource: Resource) ExportResult {
         _ = resource;
+        _ = self.export_calls.fetchAdd(1, .monotonic);
         for (spans) |span| {
             // Deep-copy so attributes remain valid after the source RecordingSpan is freed.
             const owned = SpanData.initOwned(self.allocator, span) catch return .failure;
@@ -192,6 +195,10 @@ pub const MockSpanExporter = struct {
 
     pub fn spanCount(self: *const MockSpanExporter) usize {
         return self.exported_spans.items.len;
+    }
+
+    pub fn exportCallCount(self: *const MockSpanExporter) usize {
+        return self.export_calls.load(.monotonic);
     }
 
     pub fn getSpan(self: *const MockSpanExporter, index: usize) ?SpanData {

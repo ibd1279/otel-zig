@@ -7,22 +7,49 @@ const logs = @import("logs/root.zig");
 const trace = @import("trace/root.zig");
 const metrics = @import("metrics/root.zig");
 const config = @import("config/root.zig");
+const context = @import("context/root.zig");
 
 // Default global providers, if providers are not setup.
 const default_logger_provider: logs.LoggerProvider = .{ .noop = {} };
 const default_tracer_provider: trace.TracerProvider = .{ .noop = {} };
 const default_meter_provider: metrics.MeterProvider = .{ .noop = {} };
 const default_config_provider: config.ConfigProvider = .{ .noop = {} };
+const default_text_map_propagator: context.TextMapPropagator = .{ .noop = {} };
 
 // Global provider storage with thread safety
 var global_logger_provider: std.atomic.Value(?*logs.LoggerProvider) = std.atomic.Value(?*logs.LoggerProvider).init(null);
 var global_tracer_provider: std.atomic.Value(?*trace.TracerProvider) = std.atomic.Value(?*trace.TracerProvider).init(null);
 var global_meter_provider: std.atomic.Value(?*metrics.MeterProvider) = std.atomic.Value(?*metrics.MeterProvider).init(null);
 var global_config_provider: std.atomic.Value(?*config.ConfigProvider) = std.atomic.Value(?*config.ConfigProvider).init(null);
+var global_text_map_propagator: std.atomic.Value(?*context.TextMapPropagator) = std.atomic.Value(?*context.TextMapPropagator).init(null);
 var logger_mutex: std.atomic.Mutex = .unlocked;
 var tracer_mutex: std.atomic.Mutex = .unlocked;
 var meter_mutex: std.atomic.Mutex = .unlocked;
 var config_mutex: std.atomic.Mutex = .unlocked;
+var propagator_mutex: std.atomic.Mutex = .unlocked;
+
+/// Get the global TextMapPropagator, defaulting to a noop propagator.
+pub fn getGlobalTextMapPropagator() *const context.TextMapPropagator {
+    const propagator = global_text_map_propagator.load(.acquire);
+    return if (propagator) |value| value else &default_text_map_propagator;
+}
+
+/// Set the global TextMapPropagator by value, managing interface wrapper memory
+/// internally (same pattern as the provider setters below).
+pub fn setGlobalTextMapPropagator(propagator: ?context.TextMapPropagator) !void {
+    while (!propagator_mutex.tryLock()) {}
+    defer propagator_mutex.unlock();
+
+    const old = global_text_map_propagator.load(.acquire);
+    if (propagator) |value| {
+        const pointer = try std.heap.page_allocator.create(context.TextMapPropagator);
+        pointer.* = value;
+        global_text_map_propagator.store(pointer, .release);
+    } else {
+        global_text_map_propagator.store(null, .release);
+    }
+    if (old) |pointer| std.heap.page_allocator.destroy(pointer);
+}
 
 /// Get the global logger provider. Fatal if a provider is not setup.
 pub fn getGlobalLoggerProvider() *const logs.LoggerProvider {
@@ -191,4 +218,16 @@ pub fn unsetAllProviders() void {
     setGlobalTracerProvider(null) catch {};
     setGlobalMeterProvider(null) catch {};
     setGlobalConfigProvider(null) catch {};
+    setGlobalTextMapPropagator(null) catch {};
+}
+
+test "global text map propagator can be installed and reset" {
+    defer setGlobalTextMapPropagator(null) catch {};
+    try setGlobalTextMapPropagator(context.createW3cBaggagePropagator());
+    const fields = try getGlobalTextMapPropagator().fields(std.testing.allocator);
+    defer std.testing.allocator.free(fields);
+    try std.testing.expectEqual(@as(usize, 3), fields.len);
+    try std.testing.expectEqualStrings("traceparent", fields[0]);
+    try std.testing.expectEqualStrings("tracestate", fields[1]);
+    try std.testing.expectEqualStrings("baggage", fields[2]);
 }
