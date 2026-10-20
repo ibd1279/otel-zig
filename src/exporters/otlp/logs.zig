@@ -10,7 +10,7 @@ const Transport = @import("root.zig").Transport;
 const Resource = sdk.resource.Resource;
 const ResourceBuilder = sdk.resource.ResourceBuilder;
 const convert = @import("convert.zig");
-const otlp_transport = @import("transport.zig");
+const otlp_transport = @import("transport_backend.zig").transport;
 
 // Import protobuf definitions
 const logs_v1 = @import("proto/opentelemetry/proto/logs/v1.pb.zig");

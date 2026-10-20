@@ -72,6 +72,30 @@ pub fn build(b: *std.Build) void {
     otel_exporters_mod.addImport("protobuf", protobuf_dep.module("protobuf"));
 
     // ========================================================================
+    // OTLP/HTTP transport backend selection (opt-in httpx.zig spike)
+    // ========================================================================
+    // `-Dotlp-httpx` swaps the OTLP/HTTP transport to the httpx.zig-backed
+    // variant (`src/exporters/otlp/transport_httpx.zig`). The httpx
+    // dependency is only RESOLVED when the option is on, so a default build
+    // fetches and compiles zero httpx code; the dependency set is otherwise
+    // unchanged.
+    const use_httpx_transport = b.option(
+        bool,
+        "otlp-httpx",
+        "Use httpx.zig (0.2.2) as the OTLP/HTTP transport backend instead of std.http",
+    ) orelse false;
+    const transport_build_options = b.addOptions();
+    transport_build_options.addOption(bool, "otlp_httpx", use_httpx_transport);
+    otel_exporters_mod.addImport("build_options", transport_build_options.createModule());
+    if (use_httpx_transport) {
+        const httpx_dep = b.dependency("httpx", .{
+            .target = target,
+            .optimize = optimize,
+        });
+        otel_exporters_mod.addImport("httpx", httpx_dep.module("httpx"));
+    }
+
+    // ========================================================================
     // OpenTelemetry Semantic Conventions Module
     // ========================================================================
     // Contains semantic conventions, can be used independently

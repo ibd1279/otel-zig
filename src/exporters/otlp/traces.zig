@@ -17,7 +17,7 @@ const SpanContext = otel_api.trace.SpanContext;
 const error_handler = otel_api.common;
 const SpanExporter = otel_sdk.trace.SpanExporter;
 const convert = @import("convert.zig");
-const otlp_transport = @import("transport.zig");
+const otlp_transport = @import("transport_backend.zig").transport;
 
 const common_v1 = @import("proto/opentelemetry/proto/common/v1.pb.zig");
 const resource_v1 = @import("proto/opentelemetry/proto/resource/v1.pb.zig");

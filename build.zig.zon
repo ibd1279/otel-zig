@@ -42,6 +42,10 @@
             .url = "git+https://github.com/Arwalk/zig-protobuf#9eb9912ae609147e5a3c3e8915ae048dc9398294",
             .hash = "protobuf-5.0.0-0e82aitNKACdM38Q5mbHhtsB_4aar09scp05zAOKV-Ao",
         },
+        .httpx = .{
+            .url = "git+https://github.com/muhammad-fiaz/httpx.zig#deacfacea9a83c060d65ad65da1e40fa2edadc43",
+            .hash = "httpx-0.2.2-8qj2elvJGAGEGluJssHtz2AqxReKPa_LjDxnygVfefMq",
+        },
     },
     .paths = .{
         "build.zig",
