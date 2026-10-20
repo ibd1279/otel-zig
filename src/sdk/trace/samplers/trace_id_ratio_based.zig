@@ -14,18 +14,18 @@ const TraceId = otel_api.common.TraceId;
 /// Sampler that samples spans based on trace ID hash and a configured ratio
 pub const TraceIdRatioBasedSampler = struct {
     const max_threshold = 0xFFFFFFFFFFFFFF;
-    const max_th: [14]u8 = [_]u8{'F'} ** 14;
+    const max_th: [14]u8 = @splat('F');
     threshold: u56,
-    desc_buffer: [56]u8 = [_]u8{0} ** 56,
+    desc_buffer: [56]u8 = @splat(0),
     desc_len: u8,
-    th_buffer: [14]u8 = [_]u8{'0'} ** 14,
+    th_buffer: [14]u8 = @splat('0'),
     th_len: u8 = 1,
 
     /// Create a new TraceIdRatioBasedSampler; precision is of the threshold, not the float.
     pub fn init(ratio: f64, precision: u6) TraceIdRatioBasedSampler {
         const desc_format = "TraceIdRatioBased{{{d}}}";
         const desc_format_fallback = "TraceIdRatioBased{DescriptionError}";
-        var desc_buffer = [_]u8{0} ** 56;
+        var desc_buffer: [56]u8 = @splat(0);
 
         if (ratio >= 1.0) {
             const desc = std.fmt.bufPrint(&desc_buffer, desc_format, .{1.0}) catch blk: {
@@ -195,7 +195,7 @@ test "TraceIdRatioBasedSampler - ratio 1.0 always samples" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test-span",
         .span_kind = .internal,
     });
@@ -208,7 +208,7 @@ test "TraceIdRatioBasedSampler - ratio 0.0 never samples" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test-span",
         .span_kind = .internal,
     });
@@ -231,7 +231,7 @@ test "TraceIdRatioBasedSampler - deterministic behavior" {
     const params = SampleParams{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test-span",
         .span_kind = .internal,
     };
@@ -257,7 +257,7 @@ test "TraceIdRatioBasedSampler - different trace IDs" {
 
     var i: u8 = 0;
     while (i < 100) : (i += 1) {
-        // const trace_id = TraceId.fromBytes([_]u8{i} ** 16);
+        // const trace_id = TraceId.fromBytes(@splat(i));
         const trace_id = TraceId.fromBytes(id_generator.generateTraceId());
         const params = SampleParams{
             .allocator = testing.allocator,
@@ -297,8 +297,8 @@ test "TraceIdRatioBasedSampler - warns when used as child sampler" {
     const sampler = TraceIdRatioBasedSampler.init(1.0, 14);
 
     const parent_ctx = otel_api.trace.Span.Context{
-        .trace_id = otel_api.common.TraceId.fromBytes([_]u8{1} ** 16),
-        .span_id = otel_api.common.SpanId.fromBytes([_]u8{2} ** 8),
+        .trace_id = otel_api.common.TraceId.fromBytes(@splat(1)),
+        .span_id = otel_api.common.SpanId.fromBytes(@splat(2)),
         .trace_flags = otel_api.trace.Span.Context.SAMPLED_FLAG,
         .trace_state = null,
         .is_remote = false,
@@ -309,7 +309,7 @@ test "TraceIdRatioBasedSampler - warns when used as child sampler" {
     _ = sampler.shouldSample(.{
         .allocator = allocator,
         .context = ctx,
-        .trace_id = otel_api.common.TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = otel_api.common.TraceId.fromBytes(@splat(1)),
         .span_name = "child",
         .span_kind = .internal,
     });

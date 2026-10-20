@@ -71,7 +71,7 @@ pub const Logger = struct {
         //
         // assumes logging is less likely to be enabled in release modes.
         const branch_hint = comptime switch (@import("builtin").mode) {
-            .Debug => std.builtin.BranchHint.unpredictable,
+            .debug => std.builtin.BranchHint.unpredictable,
             else => std.builtin.BranchHint.unlikely,
         };
         if (self.enabled(ctx, record_severity)) {

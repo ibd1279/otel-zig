@@ -17,6 +17,7 @@ const SpanContext = otel_api.trace.SpanContext;
 const error_handler = otel_api.common;
 const SpanExporter = otel_sdk.trace.SpanExporter;
 const convert = @import("convert.zig");
+const otlp_transport = @import("transport.zig");
 
 const common_v1 = @import("proto/opentelemetry/proto/common/v1.pb.zig");
 const resource_v1 = @import("proto/opentelemetry/proto/resource/v1.pb.zig");
@@ -134,10 +135,6 @@ pub const OtlpTraceExporter = struct {
     }
 
     fn sendRequest(self: *OtlpTraceExporter, allocator: std.mem.Allocator, traces_data: trace_v1.TracesData) !ExportResult {
-        const io = self.config.io;
-        var client = std.http.Client{ .allocator = self.allocator, .io = io };
-        defer client.deinit();
-
         const content_type: []const u8 = switch (self.config.transport) {
             .http_protobuf => "application/x-protobuf",
             .http_json => "application/json",
@@ -174,24 +171,8 @@ pub const OtlpTraceExporter = struct {
             },
         };
 
-        const full_url = if (self.config.append_signal_path)
-            try joinSignalPathWithOtlpPort(allocator, self.config.endpoint, self.config.protocol_config.traces_path)
-        else
-            try allocator.dupe(u8, self.config.endpoint);
+        const full_url = try otlp_transport.signalUrl(allocator, self.config, self.config.protocol_config.traces_path);
         defer allocator.free(full_url);
-
-        // Parse endpoint URL with detailed error context
-        const full_uri = std.Uri.parse(full_url) catch |err| {
-            error_handler.reportError(.{
-                .component = .exporter,
-                .operation = "otlp_url_parsing",
-                .error_type = .configuration,
-                .message = "OTLP URL parsing failed",
-                .context = self.config.endpoint,
-                .source_error = err,
-            });
-            return err;
-        };
 
         // Add custom headers from config.
         const compression_headers: usize = if (self.config.compression == .gzip) 1 else 0;
@@ -204,148 +185,11 @@ pub const OtlpTraceExporter = struct {
             extra_headers[self.config.headers.len] = .{ .name = "content-encoding", .value = "gzip" };
         }
 
-        // Create HTTP request
-        var resp_writer = std.Io.Writer.Allocating.init(allocator);
-        defer resp_writer.deinit();
-
-        const fetch_options = std.http.Client.FetchOptions{
-            .location = .{ .uri = full_uri },
-            .method = .POST,
-            .headers = .{
-                .content_type = .{ .override = content_type },
-                .user_agent = .{ .override = "otel-zig-otlp" },
-            },
-            .extra_headers = extra_headers,
-            .response_writer = &resp_writer.writer,
-            .payload = payload,
-        };
-        const Fetch = struct {
-            fn run(http: *std.http.Client, options: std.http.Client.FetchOptions) anyerror!std.http.Client.FetchResult {
-                return http.fetch(options);
-            }
-        };
-        const Outcome = union(enum) {
-            request: anyerror!std.http.Client.FetchResult,
-            timeout: std.Io.Cancelable!void,
-        };
-        var outcomes: [2]Outcome = undefined;
-        var pending = std.Io.Select(Outcome).init(io, &outcomes);
-        // Must be `concurrent`, not `async`: `Select.async` (Io.groupAsync) is
-        // allowed to run the function inline on the calling thread (e.g. when
-        // the io backend's async worker limit is reached), which would block
-        // sendRequest until the HTTP request finishes and make the timeout
-        // branch unreachable. `concurrent` guarantees both branches a unit of
-        // concurrency, so the deadline race is real.
-        try pending.concurrent(.request, Fetch.run, .{ &client, fetch_options });
-        try pending.concurrent(.timeout, std.Io.sleep, .{
-            io,
-            .{ .nanoseconds = @intCast(self.config.timeout_millis *| std.time.ns_per_ms) },
-            .awake,
-        });
-        const req = switch (try pending.await()) {
-            .request => |result| try result,
-            .timeout => {
-                pending.cancelDiscard();
-                return error.Timeout;
-            },
-        };
-        pending.cancelDiscard();
-
-        const result_status_code = req.status;
-        const result_body = try resp_writer.toOwnedSlice();
-        defer allocator.free(result_body);
-
-        switch (result_status_code) {
-            .ok => return .success,
-            .bad_request => {
-                // const error_context = try std.fmt.allocPrint(allocator, "{s}\ncurl -X POST -H 'Content-Type: application/json' -d '{s}' http://localhost:4318/v1/traces", .{ result_body, protobuf_bytes });
-                // defer allocator.free(error_context);
-                const error_context = try std.fmt.allocPrint(allocator, "{t}-{s}", .{ result_status_code, result_body });
-                defer allocator.free(error_context);
-                error_handler.reportError(.{
-                    .component = .exporter,
-                    .operation = "otlp_trace_response",
-                    .error_type = .unknown,
-                    .message = "OTLP trace export failed with HTTP error",
-                    .context = error_context,
-                });
-                return .failure;
-            },
-            .unauthorized, .forbidden, .not_found => {
-                error_handler.reportError(.{
-                    .component = .exporter,
-                    .operation = "otlp_trace_response",
-                    .error_type = .authentication,
-                    .message = "OTLP trace export failed with HTTP error",
-                    .context = self.config.endpoint,
-                });
-                return .failure;
-            },
-            else => {
-                const error_context = try std.fmt.allocPrint(allocator, "{t}-{s}", .{ result_status_code, result_body });
-                defer allocator.free(error_context);
-
-                error_handler.reportError(.{
-                    .component = .exporter,
-                    .operation = "otlp_trace_response",
-                    .error_type = .authentication,
-                    .message = "OTLP trace export failed with HTTP error",
-                    .context = error_context,
-                });
-                return .failure;
-            },
-        }
+        return otlp_transport.post(self.allocator, allocator, self.config, full_url, content_type, extra_headers, payload, "trace");
     }
 };
 
-/// Like `joinSignalPath`, but defaults a port-less authority to the OTLP/HTTP
-/// port (4318) instead of letting std.http fall back to the scheme default
-/// (80/443) — a port-less `http://collector` must reach :4318.
-fn joinSignalPathWithOtlpPort(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8) ![]u8 {
-    const trimmed = std.mem.trimEnd(u8, endpoint, "/");
-    const authority = try defaultOtlpAuthority(allocator, trimmed);
-    defer allocator.free(authority);
-    if (path.len == 0) return allocator.dupe(u8, authority);
-    return std.fmt.allocPrint(allocator, "{s}/{s}", .{
-        authority,
-        std.mem.trimStart(u8, path, "/"),
-    });
-}
-
-/// Returns the endpoint with `:4318` inserted when the URL has an authority
-/// without an explicit port; otherwise a copy of `endpoint` is returned
-/// unchanged (either way the result is owned by `allocator`).
-fn defaultOtlpAuthority(allocator: std.mem.Allocator, endpoint: []const u8) ![]u8 {
-    const scheme_end = std.mem.indexOf(u8, endpoint, "://") orelse return allocator.dupe(u8, endpoint);
-    var authority_start = scheme_end + 3;
-    // Skip userinfo: the port separator we look for comes after any '@'.
-    if (std.mem.lastIndexOfScalar(u8, endpoint[authority_start..], '@')) |at| {
-        authority_start += at + 1;
-    }
-    var authority_end = authority_start;
-    while (authority_end < endpoint.len and endpoint[authority_end] != '/' and endpoint[authority_end] != '?' and endpoint[authority_end] != '#') : (authority_end += 1) {}
-    const authority = endpoint[authority_start..authority_end];
-    // A colon means an explicit port — except inside an IPv6 literal, where
-    // the port separator can only appear after the closing ']'.
-    const has_port = if (authority.len > 0 and authority[0] == '[')
-        std.mem.indexOfScalar(u8, authority[1..], ']') != null and
-            std.mem.indexOfScalar(u8, authority[1 + std.mem.indexOfScalar(u8, authority[1..], ']').? ..], ':') != null
-    else
-        std.mem.indexOfScalar(u8, authority, ':') != null;
-    if (has_port) return allocator.dupe(u8, endpoint);
-    return std.fmt.allocPrint(allocator, "{s}:4318{s}", .{
-        endpoint[0..authority_end],
-        endpoint[authority_end..],
-    });
-}
-
-fn joinSignalPath(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8) ![]u8 {
-    if (path.len == 0) return allocator.dupe(u8, endpoint);
-    return std.fmt.allocPrint(allocator, "{s}/{s}", .{
-        std.mem.trimEnd(u8, endpoint, "/"),
-        std.mem.trimStart(u8, path, "/"),
-    });
-}
+const joinSignalPath = otlp_transport.joinSignalPath;
 
 test "trace endpoint preserves configured paths" {
     const testing = std.testing;
@@ -445,14 +289,49 @@ const TestCollector = struct {
         _ = try body_reader.streamRemaining(&discard);
         try io.sleep(.{ .nanoseconds = @intCast(delay_ms * std.time.ns_per_ms) }, .awake);
     }
+
+    fn receiveRetrySequence(listener: *std.Io.net.Server, io: std.Io) !void {
+        const statuses = [_]std.http.Status{ .service_unavailable, .too_many_requests, .accepted };
+        for (statuses, 0..) |status, index| {
+            var stream = try listener.accept(io);
+            defer stream.close(io);
+            var read_buffer: [4096]u8 = undefined;
+            var write_buffer: [4096]u8 = undefined;
+            var reader = stream.reader(io, &read_buffer);
+            var writer = stream.writer(io, &write_buffer);
+            var server = std.http.Server.init(&reader.interface, &writer.interface);
+            var request = try server.receiveHead();
+            const retry_after: []const std.http.Header = if (index == 1)
+                &.{.{ .name = "retry-after", .value = "0" }}
+            else
+                &.{};
+            try request.respond("", .{ .status = status, .keep_alive = false, .extra_headers = retry_after });
+        }
+    }
+
+    fn receiveRetryAfterOneSecond(listener: *std.Io.net.Server, io: std.Io) !void {
+        var stream = try listener.accept(io);
+        defer stream.close(io);
+        var read_buffer: [4096]u8 = undefined;
+        var write_buffer: [4096]u8 = undefined;
+        var reader = stream.reader(io, &read_buffer);
+        var writer = stream.writer(io, &write_buffer);
+        var server = std.http.Server.init(&reader.interface, &writer.interface);
+        var request = try server.receiveHead();
+        try request.respond("", .{
+            .status = .too_many_requests,
+            .keep_alive = false,
+            .extra_headers = &.{.{ .name = "retry-after", .value = "1" }},
+        });
+    }
 };
 
 fn testSpan(name: []const u8) otel_sdk.trace.SpanData {
     return .{
         .scope = .{ .name = "offline-test" },
         .ctx = .{
-            .trace_id = .{ .bytes = [_]u8{1} ** 16 },
-            .span_id = .{ .bytes = [_]u8{2} ** 8 },
+            .trace_id = .{ .bytes = @splat(1) },
+            .span_id = .{ .bytes = @splat(2) },
             .trace_flags = 1,
             .trace_state = null,
             .is_remote = false,
@@ -559,12 +438,71 @@ test "OTLP HTTP export cancels a stalled collector at the configured timeout" {
         .io = io,
         .transport = .http_json,
         .timeout_millis = 30,
+        .retry_config = .{ .enabled = false },
     });
     const spans = [_]otel_sdk.trace.SpanData{testSpan("timeout-span")};
     const started = std.Io.Timestamp.now(io, .awake).nanoseconds;
     try testing.expectEqual(ExportResult.failure, exporter.exportSpans(&spans, .empty));
     const elapsed = std.Io.Timestamp.now(io, .awake).nanoseconds - started;
     try testing.expect(elapsed < 200 * std.time.ns_per_ms);
+}
+
+test "OTLP HTTP export retries upstream statuses and honors Retry-After" {
+    const testing = std.testing;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var listener = (std.Io.net.IpAddress{ .ip4 = .loopback(0) }).listen(io, .{ .reuse_address = true }) catch unreachable;
+    defer listener.deinit(io);
+    var collector = try io.concurrent(TestCollector.receiveRetrySequence, .{ &listener, io });
+    defer _ = collector.cancel(io) catch {};
+
+    var endpoint_buffer: [128]u8 = undefined;
+    const endpoint = try std.fmt.bufPrint(&endpoint_buffer, "http://127.0.0.1:{d}", .{listener.socket.address.getPort()});
+    var exporter = OtlpTraceExporter.init(testing.allocator, .{
+        .endpoint = endpoint,
+        .io = io,
+        .transport = .http_json,
+        .timeout_millis = 1_000,
+        .export_timeout_millis = 500,
+        .retry_config = .{
+            .initial_interval_millis = 5,
+            .max_interval_millis = 5,
+            .max_elapsed_time_millis = 500,
+            .jitter = false,
+        },
+    });
+    const spans = [_]otel_sdk.trace.SpanData{testSpan("retry-span")};
+    try testing.expectEqual(ExportResult.success, exporter.exportSpans(&spans, .empty));
+    try collector.await(io);
+}
+
+test "OTLP BSP export timeout caps Retry-After and the complete retry lifecycle" {
+    const testing = std.testing;
+    var threaded: std.Io.Threaded = .init(testing.allocator, .{});
+    defer threaded.deinit();
+    const io = threaded.io();
+    var listener = (std.Io.net.IpAddress{ .ip4 = .loopback(0) }).listen(io, .{ .reuse_address = true }) catch unreachable;
+    defer listener.deinit(io);
+    var collector = try io.concurrent(TestCollector.receiveRetryAfterOneSecond, .{ &listener, io });
+    defer _ = collector.cancel(io) catch {};
+
+    var endpoint_buffer: [128]u8 = undefined;
+    const endpoint = try std.fmt.bufPrint(&endpoint_buffer, "http://127.0.0.1:{d}", .{listener.socket.address.getPort()});
+    var exporter = OtlpTraceExporter.init(testing.allocator, .{
+        .endpoint = endpoint,
+        .io = io,
+        .transport = .http_json,
+        .timeout_millis = 1_000,
+        .export_timeout_millis = 40,
+        .retry_config = .{ .max_elapsed_time_millis = 1_000, .jitter = false },
+    });
+    const spans = [_]otel_sdk.trace.SpanData{testSpan("export-timeout-span")};
+    const started = std.Io.Timestamp.now(io, .awake).nanoseconds;
+    try testing.expectEqual(ExportResult.failure, exporter.exportSpans(&spans, .empty));
+    const elapsed = std.Io.Timestamp.now(io, .awake).nanoseconds - started;
+    try testing.expect(elapsed < 200 * std.time.ns_per_ms);
+    try collector.await(io);
 }
 
 fn convertToOtlpFormat(allocator: std.mem.Allocator, spans: []const otel_sdk.trace.SpanData, resource: Resource) !trace_v1.TracesData {
@@ -708,25 +646,48 @@ test "OtlpTraceExporter basic functionality" {
     try testing.expectEqual(ExportResult.success, shutdown_result);
 }
 
-test "port-less endpoint defaults to the OTLP HTTP port 4318" {
+test "OTLP trace protobuf bytes are stable" {
     const testing = std.testing;
-    const allocator = testing.allocator;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
-    const cases = [_]struct {
-        endpoint: []const u8,
-        path: []const u8,
-        expected: []const u8,
-    }{
-        .{ .endpoint = "http://collector.example", .path = "/v1/traces", .expected = "http://collector.example:4318/v1/traces" },
-        .{ .endpoint = "https://collector.example", .path = "/v1/traces", .expected = "https://collector.example:4318/v1/traces" },
-        .{ .endpoint = "http://collector.example:4319/base", .path = "/v1/traces", .expected = "http://collector.example:4319/base/v1/traces" },
-        .{ .endpoint = "http://user:pw@collector.example", .path = "/v1/traces", .expected = "http://user:pw@collector.example:4318/v1/traces" },
-        .{ .endpoint = "http://[::1]/", .path = "/v1/traces", .expected = "http://[::1]:4318/v1/traces" },
-        .{ .endpoint = "http://collector.example:4318", .path = "", .expected = "http://collector.example:4318" },
+    var span_attributes = [_]otel_api.common.AttributeKeyValue{
+        .{ .key = "http.method", .value = .{ .string = "GET" } },
+        .{ .key = "http.status_code", .value = .{ .int = 503 } },
+        .{ .key = "retry", .value = .{ .bool = true } },
+        .{ .key = "ratio", .value = .{ .float = 0.25 } },
     };
-    for (cases) |case| {
-        const actual = try joinSignalPathWithOtlpPort(allocator, case.endpoint, case.path);
-        defer allocator.free(actual);
-        try testing.expectEqualStrings(case.expected, actual);
-    }
+    var span = testSpan("golden-span");
+    span.parent_ctx = .{
+        .trace_id = span.ctx.trace_id,
+        .span_id = .{ .bytes = @as([8]u8, @splat(3)) },
+        .trace_flags = 1,
+        .trace_state = null,
+        .is_remote = true,
+    };
+    span.kind = .server;
+    span.status = .{ .code = .@"error", .description = "upstream unavailable" };
+    span.start_time = std.Io.Timestamp.fromNanoseconds(1_700_000_000_000_000_000);
+    span.end_time = std.Io.Timestamp.fromNanoseconds(1_700_000_000_250_000_000);
+    span.attributes = &span_attributes;
+    const resource_attributes = [_]otel_api.common.AttributeKeyValue{
+        .{ .key = "service.name", .value = .{ .string = "golden" } },
+    };
+    const spans = [_]otel_sdk.trace.SpanData{span};
+    var traces_data = try convertToOtlpFormat(allocator, &spans, .{ .attributes = &resource_attributes });
+    var buffer = std.Io.Writer.Allocating.init(allocator);
+    try traces_data.encode(&buffer.writer, allocator);
+
+    const hex = try std.fmt.allocPrint(allocator, "{x}", .{buffer.written()});
+    try testing.expectEqualStrings(golden_trace_hex, hex);
 }
+
+// Recorded from zig 0.16 with zig-protobuf 4.0.0; pins the OTLP wire bytes
+// across compiler and protobuf upgrades.
+const golden_trace_hex =
+    "0ae9010a1a0a180a0c736572766963652e6e616d6512080a06676f6c64656e12ca010a0e0a0c6f66666c696e652d7465" ++
+    "737412b7010a100101010101010101010101010101010112080202020202020202220803030303030303038501010000" ++
+    "002a0b676f6c64656e2d7370616e30023900002a36fe9c97174180b21045fe9c97174a140a0b687474702e6d6574686f" ++
+    "6412050a034745544a170a10687474702e7374617475735f636f6465120318f7034a0b0a057265747279120210014a12" ++
+    "0a05726174696f120921000000000000d03f7a181214757073747265616d20756e617661696c61626c651802";

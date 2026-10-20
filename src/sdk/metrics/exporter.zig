@@ -143,6 +143,11 @@ pub const MockMetricExporter = struct {
         for (self.exported_metrics.items) |data| {
             for (data.data_points) |point| {
                 api.AttributeKeyValue.deinitOwnedSlice(self.allocator, point.attributes);
+                switch (point.value) {
+                    .f64_histogram => |h| self.allocator.free(h.bucket_counts),
+                    .i64_histogram => |h| self.allocator.free(h.bucket_counts),
+                    else => {},
+                }
             }
             self.allocator.free(data.name);
             if (data.description) |d| self.allocator.free(d);
@@ -179,6 +184,16 @@ pub const MockMetricExporter = struct {
             var new_point = point;
             new_point.attributes = try api.AttributeKeyValue.initOwnedSlice(self.allocator, point.attributes);
             errdefer api.AttributeKeyValue.deinitOwnedSlice(self.allocator, new_point.attributes);
+            // Deep-copy histogram payload: the source bucket_counts slice is
+            // owned by the reader's aggregation snapshot and is freed after
+            // export returns. Without a dupe, exported metrics dangle (this
+            // used to pass only because 0.16's allocator left the freed bytes
+            // intact; 0.17 does not).
+            switch (new_point.value) {
+                .f64_histogram => |*h| h.bucket_counts = try self.allocator.dupe(u64, point.value.f64_histogram.bucket_counts),
+                .i64_histogram => |*h| h.bucket_counts = try self.allocator.dupe(u64, point.value.i64_histogram.bucket_counts),
+                else => {},
+            }
             try data_points.append(self.allocator, new_point);
         }
         const points = try data_points.toOwnedSlice(self.allocator);

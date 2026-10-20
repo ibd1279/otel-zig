@@ -42,7 +42,7 @@ test "AlwaysRecord - drop becomes record_only" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test",
         .span_kind = .internal,
     });
@@ -54,7 +54,7 @@ test "AlwaysRecord - record_and_sample passes through" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test",
         .span_kind = .internal,
     });
@@ -84,7 +84,7 @@ test "AlwaysRecord - record_only passes through" {
     const result = sampler.shouldSample(.{
         .allocator = testing.allocator,
         .context = &.{},
-        .trace_id = TraceId.fromBytes([_]u8{1} ** 16),
+        .trace_id = TraceId.fromBytes(@splat(1)),
         .span_name = "test",
         .span_kind = .internal,
     });
