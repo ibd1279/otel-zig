@@ -166,16 +166,13 @@ fn isToken(byte: u8) bool {
 }
 
 fn validEncodedValue(value: []const u8) bool {
-    var index: usize = 0;
-    while (index < value.len) : (index += 1) {
-        const byte = value[index];
+    // Charset check only: malformed percent-escapes are NOT rejected here.
+    // decodeValue owns escape validation and replaces invalid sequences with
+    // U+FFFD per W3C Baggage SS Value, so a member with a malformed escape
+    // survives with a replacement character (otel-go behavior) instead of
+    // being skipped.
+    for (value) |byte| {
         if (byte < 0x21 or byte > 0x7e or byte == '"' or byte == ',' or byte == ';' or byte == '\\') return false;
-        if (byte == '%') {
-            if (index + 2 >= value.len) return false;
-            _ = std.fmt.charToDigit(value[index + 1], 16) catch return false;
-            _ = std.fmt.charToDigit(value[index + 2], 16) catch return false;
-            index += 2;
-        }
     }
     return true;
 }
@@ -264,7 +261,8 @@ fn decodeValue(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
 /// replaced with the U+FFFD replacement character (W3C Baggage SS Value).
 fn replaceInvalidUtf8(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
     if (std.unicode.utf8ValidateSlice(bytes)) return allocator.dupe(u8, bytes);
-    var result = try allocator.alloc(u8, bytes.len + 3 * bytes.len / 2 + 3);
+    // Worst case: every byte is an invalid UTF-8 lead byte -> 3 bytes out per byte in.
+    var result = try allocator.alloc(u8, std.math.mul(usize, bytes.len, 3) catch return error.OutOfMemory);
     errdefer allocator.free(result);
     var destination: usize = 0;
     var index: usize = 0;
