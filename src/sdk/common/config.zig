@@ -106,8 +106,12 @@ pub const EnvironmentVariables = struct {
 };
 
 /// Get an environment variable value (returned slice is owned by page_allocator; caller must free)
+///
+/// Requires libc linkage: std has no libc-free environment access in 0.16/0.17
+/// (std.posix.getenv was removed; start.zig hands non-libc programs an empty
+/// environ), so OTEL_* env support keeps std.c.getenv and the SDK modules
+/// declare link_libc.
 pub fn getEnvironmentVariable(name: []const u8) ?[]const u8 {
-    // Build a null-terminated name for the C getenv call.
     var name_buf: [256]u8 = undefined;
     if (name.len >= name_buf.len) return null;
     @memcpy(name_buf[0..name.len], name);

@@ -6,6 +6,7 @@ const ContextBuilder = @import("../context/context.zig").ContextBuilder;
 const ContextKeyValue = @import("../context/context.zig").ContextKeyValue;
 const TextMapCarrier = @import("../context/propagation.zig").TextMapCarrier;
 const context_keys = @import("../trace/context_keys.zig");
+const api = struct { const common = @import("../common/error_handler.zig"); };
 
 pub const BAGGAGE_HEADER = "baggage";
 const max_members = 64;
@@ -89,37 +90,66 @@ fn parseHeader(allocator: std.mem.Allocator, header: []const u8) ![]BaggageKeyVa
     var members = std.mem.splitScalar(u8, header, ',');
     while (members.next()) |raw_member| {
         const member = std.mem.trim(u8, raw_member, " \t");
-        const semicolon = std.mem.indexOfScalar(u8, member, ';');
-        const key_value = if (semicolon) |index| member[0..index] else member;
-        const metadata = if (semicolon) |index| member[index..] else null;
-        const equals = std.mem.indexOfScalar(u8, key_value, '=') orelse return error.InvalidBaggage;
-        const key = std.mem.trim(u8, key_value[0..equals], " \t");
-        const encoded_value = std.mem.trim(u8, key_value[equals + 1 ..], " \t");
-        if (!validKey(key) or !validEncodedValue(encoded_value) or !validMetadata(metadata)) return error.InvalidBaggage;
-
-        const value = try unescapeValue(allocator, encoded_value);
-        defer allocator.free(value);
-        if (!std.unicode.utf8ValidateSlice(value)) return error.InvalidBaggage;
-        const owned = try BaggageKeyValue.initOwned(allocator, key, value, metadata);
-
-        var replaced = false;
-        for (entries.items) |*existing| {
-            if (std.mem.eql(u8, existing.key, key)) {
-                existing.deinitOwned(allocator);
-                existing.* = owned;
-                replaced = true;
-                break;
-            }
-        }
-        if (!replaced) {
-            if (entries.items.len == max_members) {
-                owned.deinitOwned(allocator);
-                return error.InvalidBaggage;
-            }
-            try entries.append(allocator, owned);
+        // Per-member error handling: W3C Baggage leaves behavior for
+        // malformed members undefined ("MAY decide to not propagate the
+        // baggage-string at all"), but every OTel reference implementation
+        // skips the invalid member and keeps the valid ones — one malformed
+        // member from an upstream service must not poison all baggage
+        // propagation for the request.
+        const member_result = parseMember(allocator, member, &entries);
+        if (member_result) |_| {} else |err| switch (err) {
+            error.InvalidMember => {
+                api.common.reportError(.{
+                    .component = .baggage,
+                    .operation = "baggage_extract",
+                    .error_type = .validation,
+                    .message = "Skipping malformed W3C baggage member",
+                    .context = member,
+                });
+                continue;
+            },
+            else => return err,
         }
     }
     return entries.toOwnedSlice(allocator);
+}
+
+/// Parse and append one baggage member. `error.InvalidMember` means the member
+/// is malformed and should be skipped; other errors are allocation failures.
+fn parseMember(allocator: std.mem.Allocator, member: []const u8, entries: *std.ArrayList(BaggageKeyValue)) !void {
+    const semicolon = std.mem.indexOfScalar(u8, member, ';');
+    const key_value = if (semicolon) |index| member[0..index] else member;
+    const metadata = if (semicolon) |index| member[index..] else null;
+    const equals = std.mem.indexOfScalar(u8, key_value, '=') orelse return error.InvalidMember;
+    const key = std.mem.trim(u8, key_value[0..equals], " \t");
+    const encoded_value = std.mem.trim(u8, key_value[equals + 1 ..], " \t");
+    if (!validKey(key) or !validEncodedValue(encoded_value) or !validMetadata(metadata)) return error.InvalidMember;
+
+    // Percent-decode with U+FFFD replacement (W3C Baggage §Value: invalid
+    // percent-octet sequences and non-UTF-8 bytes MUST be replaced with
+    // U+FFFD, not rejected).
+    const value = try decodeValue(allocator, encoded_value);
+    defer allocator.free(value);
+    const owned = try BaggageKeyValue.initOwned(allocator, key, value, metadata);
+
+    var replaced = false;
+    for (entries.items) |*existing| {
+        if (std.mem.eql(u8, existing.key, key)) {
+            existing.deinitOwned(allocator);
+            existing.* = owned;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced) {
+        if (entries.items.len == max_members) {
+            // Spec caps baggage at 64 members (W3C: "aggregators MUST drop
+            // entries"); drop further members, don't fail the header.
+            owned.deinitOwned(allocator);
+            return;
+        }
+        try entries.append(allocator, owned);
+    }
 }
 
 fn validKey(key: []const u8) bool {
@@ -192,22 +222,81 @@ fn escapeValue(destination: []u8, value: []const u8) usize {
     return used;
 }
 
-fn unescapeValue(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
-    var result = try allocator.alloc(u8, value.len);
+fn decodeValue(allocator: std.mem.Allocator, value: []const u8) ![]u8 {
+    // Upper bound: every source byte can expand to the 3-byte U+FFFD sequence.
+    var result = try allocator.alloc(u8, value.len * 3);
     errdefer allocator.free(result);
     var source: usize = 0;
     var destination: usize = 0;
     while (source < value.len) {
         if (value[source] == '%') {
-            const high = std.fmt.charToDigit(value[source + 1], 16) catch return error.InvalidBaggage;
-            const low = std.fmt.charToDigit(value[source + 2], 16) catch return error.InvalidBaggage;
-            result[destination] = (high << 4) | low;
-            source += 3;
+            if (source + 2 < value.len) {
+                const high = std.fmt.charToDigit(value[source + 1], 16) catch null;
+                const low = if (high != null) (std.fmt.charToDigit(value[source + 2], 16) catch null) else null;
+                if (high != null and low != null) {
+                    result[destination] = (high.? << 4) | low.?;
+                    destination += 1;
+                    source += 3;
+                    continue;
+                }
+            }
+            // Malformed percent-escape: replace the octet with U+FFFD and
+            // re-scan the following bytes as literal content (W3C Baggage
+            // SS Value: invalid sequences MUST become U+FFFD).
+            result[destination] = 0xEF;
+            result[destination + 1] = 0xBF;
+            result[destination + 2] = 0xBD;
+            destination += 3;
+            source += 1;
         } else {
             result[destination] = value[source];
+            destination += 1;
             source += 1;
         }
-        destination += 1;
+    }
+    const decoded = result[0..destination];
+    const sanitized = try replaceInvalidUtf8(allocator, decoded);
+    allocator.free(result);
+    return sanitized;
+}
+
+/// Return a copy of `bytes` where every invalid UTF-8 byte sequence is
+/// replaced with the U+FFFD replacement character (W3C Baggage SS Value).
+fn replaceInvalidUtf8(allocator: std.mem.Allocator, bytes: []const u8) ![]u8 {
+    if (std.unicode.utf8ValidateSlice(bytes)) return allocator.dupe(u8, bytes);
+    var result = try allocator.alloc(u8, bytes.len + 3 * bytes.len / 2 + 3);
+    errdefer allocator.free(result);
+    var destination: usize = 0;
+    var index: usize = 0;
+    while (index < bytes.len) {
+        const byte = bytes[index];
+        const seq_len = std.unicode.utf8ByteSequenceLength(byte) catch {
+            result[destination] = 0xEF;
+            result[destination + 1] = 0xBF;
+            result[destination + 2] = 0xBD;
+            destination += 3;
+            index += 1;
+            continue;
+        };
+        if (index + seq_len > bytes.len) {
+            result[destination] = 0xEF;
+            result[destination + 1] = 0xBF;
+            result[destination + 2] = 0xBD;
+            destination += 3;
+            index += 1;
+            continue;
+        }
+        _ = std.unicode.utf8Decode(bytes[index .. index + seq_len]) catch {
+            result[destination] = 0xEF;
+            result[destination + 1] = 0xBF;
+            result[destination + 2] = 0xBD;
+            destination += 3;
+            index += 1;
+            continue;
+        };
+        @memcpy(result[destination .. destination + seq_len], bytes[index .. index + seq_len]);
+        destination += seq_len;
+        index += seq_len;
     }
     return allocator.realloc(result, destination);
 }
@@ -236,16 +325,40 @@ test "W3C baggage inject and extract" {
     try std.testing.expectEqualStrings(";tenant=waow", extracted_baggage[0].metadata.?);
 }
 
-test "invalid baggage leaves parent context unchanged" {
+test "invalid baggage member is skipped, valid members kept" {
     const allocator = std.testing.allocator;
     var hash_carrier = @import("../context/propagation.zig").HashMapCarrier.init(allocator);
     defer hash_carrier.deinit();
     var carrier = hash_carrier.carrier();
+    // One malformed member (no '='), one valid member: the malformed one must
+    // not poison propagation of the valid one.
     carrier.set(BAGGAGE_HEADER, "valid=one,invalid member");
     const parent = [_]ContextKeyValue{.{ .key = 42, .value = .{ .string = "kept" } }};
     const propagator = BaggagePropagator.init();
     const extracted = try propagator.extract(allocator, &parent, &carrier);
     defer ContextKeyValue.deinitOwnedSlice(allocator, extracted);
-    try std.testing.expectEqual(@as(usize, 1), extracted.len);
+    try std.testing.expectEqual(@as(usize, 2), extracted.len);
     try std.testing.expectEqualStrings("kept", extracted[0].value.string);
+    const baggage_entry = ContextKeyValue.scanSlice(extracted[1..], context_keys.trace_baggage_key).?;
+    const baggage = context_keys.trace_baggage_key.unwrapValue(baggage_entry.value).?;
+    try std.testing.expectEqual(@as(usize, 1), baggage.len);
+    try std.testing.expectEqualStrings("one", baggage[0].value);
+}
+
+test "invalid percent-escape is replaced with U+FFFD, not rejected" {
+    const allocator = std.testing.allocator;
+    // %ZZ is a malformed escape; W3C Baggage SS Value requires replacing it
+    // with U+FFFD (0xEF 0xBF 0xBD) rather than dropping the member.
+    const decoded = try decodeValue(allocator, "a%ZZb%41");
+    defer allocator.free(decoded);
+    // Only the '%' itself is invalid; the following literal 'Z' bytes survive.
+    try std.testing.expectEqualStrings("a\xEF\xBF\xBDZZbA", decoded);
+}
+
+test "invalid UTF-8 in decoded value is replaced with U+FFFD" {
+    const allocator = std.testing.allocator;
+    // %FF is a valid percent-escape but an invalid UTF-8 lead byte.
+    const decoded = try decodeValue(allocator, "ok%FFend");
+    defer allocator.free(decoded);
+    try std.testing.expectEqualStrings("ok\xEF\xBF\xBDend", decoded);
 }

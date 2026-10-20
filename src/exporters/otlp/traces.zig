@@ -175,7 +175,7 @@ pub const OtlpTraceExporter = struct {
         };
 
         const full_url = if (self.config.append_signal_path)
-            try joinSignalPath(allocator, self.config.endpoint, self.config.protocol_config.traces_path)
+            try joinSignalPathWithOtlpPort(allocator, self.config.endpoint, self.config.protocol_config.traces_path)
         else
             try allocator.dupe(u8, self.config.endpoint);
         defer allocator.free(full_url);
@@ -297,6 +297,38 @@ pub const OtlpTraceExporter = struct {
         }
     }
 };
+
+/// Like `joinSignalPath`, but defaults a port-less authority to the OTLP/HTTP
+/// port (4318) instead of letting std.http fall back to the scheme default
+/// (80/443) — a port-less `http://collector` must reach :4318.
+fn joinSignalPathWithOtlpPort(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8) ![]u8 {
+    const trimmed = std.mem.trimEnd(u8, endpoint, "/");
+    const authority = defaultOtlpAuthority(trimmed) orelse trimmed;
+    if (path.len == 0) return allocator.dupe(u8, authority);
+    return std.fmt.allocPrint(allocator, "{s}/{s}", .{
+        authority,
+        std.mem.trimStart(u8, path, "/"),
+    });
+}
+
+/// Returns the endpoint with `:4318` inserted when the URL has an authority
+/// without an explicit port, else null (nothing to fix).
+fn defaultOtlpAuthority(endpoint: []const u8) ?[]const u8 {
+    const scheme_end = std.mem.indexOf(u8, endpoint, "://") orelse return null;
+    var authority_start = scheme_end + 3;
+    // Skip userinfo: the port separator we look for comes after any '@'.
+    if (std.mem.lastIndexOfScalar(u8, endpoint[authority_start..], '@')) |at| {
+        authority_start += at + 1;
+    }
+    var authority_end = authority_start;
+    while (authority_end < endpoint.len and endpoint[authority_end] != '/' and endpoint[authority_end] != '?' and endpoint[authority_end] != '#') : (authority_end += 1) {}
+    const authority = endpoint[authority_start..authority_end];
+    if (std.mem.indexOfScalar(u8, authority, ':') != null) return null; // explicit port (or IPv6 literal, which must carry one)
+    return std.fmt.allocPrint(std.heap.page_allocator, "{s}:4318{s}", .{
+        endpoint[0..authority_end],
+        endpoint[authority_end..],
+    }) catch null;
+}
 
 fn joinSignalPath(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8) ![]u8 {
     if (path.len == 0) return allocator.dupe(u8, endpoint);

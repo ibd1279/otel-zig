@@ -91,7 +91,8 @@ pub const ProcessDetector = struct {
         // by the SDK. Keep unsupported targets useful by omitting this one
         // optional resource attribute instead of failing compilation.
         switch (builtin.os.tag) {
-            .linux, .macos, .freebsd, .openbsd, .netbsd, .dragonfly => attrs = attrs.add(.{ .key = "process.pid", .value = .{ .int = @intCast(std.c.getpid()) } }),
+            .linux => attrs = attrs.add(.{ .key = "process.pid", .value = .{ .int = @intCast(std.os.linux.getpid()) } }),
+            .macos, .freebsd, .openbsd, .netbsd, .dragonfly => attrs = attrs.add(.{ .key = "process.pid", .value = .{ .int = @intCast(std.c.getpid()) } }),
             else => {},
         }
 
