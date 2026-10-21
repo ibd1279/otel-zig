@@ -251,9 +251,11 @@ compile time — exporter code never knows which one is active:
   `initial_interval_millis`, multiplied by `multiplier` each retry up to
   `max_interval_millis`. With `jitter` enabled the delay is drawn uniformly
   from `[interval/2, interval*3/2]`.
-- **`Retry-After` precedence** — a numeric server `Retry-After` header on a
-  retryable response raises the delay to at least that many milliseconds;
-  it wins over the computed backoff for that attempt.
+- **`Retry-After` precedence** — a numeric (integer-seconds) server
+  `Retry-After` header on a retryable response raises the delay to at least
+  that many milliseconds; it wins over the computed backoff for that
+  attempt. The HTTP-date form is not parsed and falls through to the
+  computed backoff (both backends).
 - **Retryable status set** — exactly HTTP 429, 502, 503, and 504 are
   retried (see `transport.isRetryableStatus`). Every other non-2xx status
   fails immediately and is reported through the error handler as

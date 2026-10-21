@@ -117,22 +117,19 @@ fn httpxAttempt(
     });
     defer client.deinit();
 
-    var tls_options: ?httpx.TlsOptions = null;
-    if (config.tls_config) |tls| {
-        if (tls.insecure_skip_verify) {
-            tls_options = .{ .verify = .none };
-        } else if (tls.ca_file) |ca_file| {
-            // Custom CA bundle: load the PEM file for the duration of the
-            // request (matches the default backend's ca_file handling).
-            const pem = try readPemFile(allocator, config.io, ca_file);
-            defer allocator.free(pem);
-            tls_options = .{ .verify = .caBundle, .caPem = pem };
-        }
-    }
+    var loaded_tls = try loadTlsOptions(allocator, config.io, config.tls_config);
+    defer loaded_tls.deinit(allocator);
+    const tls_options = loaded_tls.options;
 
     // std.http.Header and httpx.Header are both `{ name: []const u8,
     // value: []const u8 }` with identical layout, so the caller's header
-    // slice is passed through without a copy.
+    // slice is passed through without a copy. The comptime assertions
+    // keep a future httpx bump from silently breaking the equivalence.
+    comptime {
+        std.debug.assert(@sizeOf(std.http.Header) == @sizeOf(httpx.Header));
+        std.debug.assert(@offsetOf(std.http.Header, "name") == @offsetOf(httpx.Header, "name"));
+        std.debug.assert(@offsetOf(std.http.Header, "value") == @offsetOf(httpx.Header, "value"));
+    }
     const httpx_headers: []const httpx.Header = @ptrCast(extra_headers);
 
     var response = try client.fetch(url, .{
@@ -177,6 +174,35 @@ fn readPemFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8
     return contents;
 }
 
+/// TLS options for one httpx attempt, plus the PEM buffer that backs
+/// `.caBundle` verification. `httpx.TlsOptions.caPem` is a borrowed slice,
+/// so the buffer is owned here and must outlive the `client.fetch()` that
+/// consumes the options — `deinit` is the only place it is freed.
+const LoadedTls = struct {
+    options: ?httpx.TlsOptions = null,
+    pem: ?[]u8 = null,
+
+    fn deinit(self: *LoadedTls, allocator: std.mem.Allocator) void {
+        if (self.pem) |buffer| allocator.free(buffer);
+        self.pem = null;
+    }
+};
+
+fn loadTlsOptions(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    tls: ?@import("root.zig").TlsConfig,
+) !LoadedTls {
+    const config = tls orelse return .{};
+    if (config.insecure_skip_verify) return .{ .options = .{ .verify = .none } };
+    const ca_file = config.ca_file orelse return .{};
+    // Custom CA bundle: load the PEM file for the duration of the request
+    // (matches the default backend's ca_file handling).
+    const pem = try readPemFile(allocator, io, ca_file);
+    errdefer allocator.free(pem);
+    return .{ .options = .{ .verify = .caBundle, .caPem = pem }, .pem = pem };
+}
+
 test "httpx backend rejects mutual TLS before any network call" {
     const testing = std.testing;
     const uri = try std.Uri.parse("http://127.0.0.1:1/v1/traces");
@@ -196,6 +222,47 @@ test "httpx backend mirrors the default backend's retryable status set" {
         try testing.expect(isRetryableStatus(status));
     }
     try testing.expect(!isRetryableStatus(.not_found));
+}
+
+test "loadTlsOptions: unset, skip-verify, and missing ca_file all avoid the caBundle path" {
+    const testing = std.testing;
+    var loaded = try loadTlsOptions(testing.allocator, std.testing.io, null);
+    defer loaded.deinit(testing.allocator);
+    try testing.expect(loaded.options == null);
+
+    loaded = try loadTlsOptions(testing.allocator, std.testing.io, .{ .insecure_skip_verify = true });
+    try testing.expect(loaded.options.?.verify == .none);
+    loaded.deinit(testing.allocator);
+
+    // A missing bundle surfaces as an error from the loader, not a
+    // silently-unverified request.
+    try testing.expectError(
+        error.FileNotFound,
+        loadTlsOptions(testing.allocator, std.testing.io, .{ .ca_file = "/nonexistent/ca.pem" }),
+    );
+}
+
+test "loadTlsOptions: ca_file PEM stays owned and pointed-to until deinit" {
+    const testing = std.testing;
+    // Write a temp PEM bundle and hand its path to the loader; the resulting
+    // TlsOptions must borrow the loader-owned buffer (the use-after-free the
+    // previous block-scoped `defer allocator.free(pem)` shipped with).
+    const pem_content = "-----BEGIN CERTIFICATE-----\nZm9vCg==\n-----END CERTIFICATE-----\n";
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(std.testing.io, .{ .sub_path = "ca.pem", .data = pem_content });
+    const ca_path = try tmp.dir.realPathFileAlloc(std.testing.io, "ca.pem", testing.allocator);
+    defer testing.allocator.free(ca_path);
+
+    var loaded = try loadTlsOptions(testing.allocator, std.testing.io, .{ .ca_file = ca_path });
+    defer loaded.deinit(testing.allocator);
+    try testing.expect(loaded.options != null);
+    try testing.expect(loaded.options.?.verify == .caBundle);
+    try testing.expect(loaded.options.?.caPem != null);
+    try testing.expectEqualStrings(pem_content, loaded.pem.?);
+    try testing.expectEqual(loaded.pem.?, loaded.options.?.caPem.?);
+    loaded.deinit(testing.allocator);
+    try testing.expect(loaded.pem == null);
 }
 
 // ---------------------------------------------------------------------------
