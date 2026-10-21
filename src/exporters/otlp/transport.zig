@@ -20,6 +20,26 @@ pub const Response = struct {
     retry_after_millis: ?u64,
 };
 
+/// The public contract every transport backend's `post()` must satisfy.
+/// Assigning a backend's `post` to a `PostFn` coerces only when the full
+/// signature matches — parameter types exactly, and a return type compatible
+/// with `anyerror!ExportResult` — so backend signature drift is a compile
+/// error (enforced in `transport_backend.zig`). Note the return type is
+/// deliberately `anyerror`: the backends' inferred error sets differ (the
+/// retry-disabled path propagates raw network errors), and 0.17 cannot
+/// compare inferred sets; the coercion captures the shape contract without
+/// narrowing behavior.
+pub const PostFn = *const fn (
+    client_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
+    config: OtlpExporterConfig,
+    url: []const u8,
+    content_type: []const u8,
+    extra_headers: []const std.http.Header,
+    payload: []const u8,
+    signal: []const u8,
+) anyerror!ExportResult;
+
 /// Generic OTLP endpoints get the per-signal path appended; an endpoint that
 /// already names the signal (`append_signal_path = false`) is used as is.
 pub fn signalUrl(allocator: std.mem.Allocator, config: OtlpExporterConfig, signal_path: []const u8) ![]u8 {
@@ -150,6 +170,16 @@ pub fn postWithPerform(
         });
         return err;
     };
+
+    // Mutual TLS is unsupported on every backend: reject a client cert/key
+    // configuration before any client (or network) exists (REQ-6/SC-12).
+    // Kept here — in the backend-agnostic retry loop — so parity is
+    // structural and a new backend cannot forget the guard.
+    if (config.tls_config) |tls| {
+        if (tls.cert_file != null and tls.key_file != null) {
+            return error.MutualTlsUnsupported;
+        }
+    }
 
     const started_ns = std.Io.Timestamp.now(config.io, .awake).nanoseconds;
     const retry_budget_ms = if (config.retry_config.max_elapsed_time_millis == 0)

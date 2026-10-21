@@ -25,6 +25,7 @@
 const std = @import("std");
 const httpx = @import("httpx");
 const otel_api = @import("otel-api");
+const otel_sdk = @import("otel-sdk");
 const OtlpExporterConfig = @import("root.zig").OtlpExporterConfig;
 const ExportResult = otel_api.common.ExportResult;
 
@@ -73,14 +74,6 @@ fn performHttpx(
     // backend parity with the std.http attempt function.
     _ = uri;
 
-    // Mutual TLS is unsupported on every backend: reject a client cert/key
-    // configuration before any client (or network) exists (REQ-6/SC-12).
-    if (config.tls_config) |tls| {
-        if (tls.cert_file != null and tls.key_file != null) {
-            return error.MutualTlsUnsupported;
-        }
-    }
-
     return base.attemptWithTimeout(config, timeout_ms, httpxAttempt, .{
         client_allocator, allocator, config, url, content_type, extra_headers, payload,
     });
@@ -95,6 +88,14 @@ fn httpxAttempt(
     extra_headers: []const std.http.Header,
     payload: []const u8,
 ) anyerror!Response {
+    // The default backend overrides the User-Agent to `otel-zig-otlp`
+    // (transport.zig), and httpx injects its own default UA only when the
+    // caller sends none — so the same identity header is prepended here to
+    // keep receiver-visible request identification backend-independent.
+    const ua_header = [_]std.http.Header{.{ .name = "user-agent", .value = "otel-zig-otlp" }};
+    const all_headers = try std.mem.concat(allocator, std.http.Header, &.{ &ua_header, extra_headers });
+    defer allocator.free(all_headers);
+
     // httpx.zig assumes a blocking (single-threaded) std.Io: it issues
     // socket reads directly instead of through the async readiness model
     // that a concurrent `std.Io.Threaded` requires. Run the client on the
@@ -130,7 +131,7 @@ fn httpxAttempt(
         std.debug.assert(@offsetOf(std.http.Header, "name") == @offsetOf(httpx.Header, "name"));
         std.debug.assert(@offsetOf(std.http.Header, "value") == @offsetOf(httpx.Header, "value"));
     }
-    const httpx_headers: []const httpx.Header = @ptrCast(extra_headers);
+    const httpx_headers: []const httpx.Header = @ptrCast(all_headers);
 
     var response = try client.fetch(url, .{
         .method = .POST,
@@ -188,10 +189,15 @@ const LoadedTls = struct {
     }
 };
 
+const transport_root = @import("root.zig");
+const otlp_traces = @import("traces.zig");
+
+const TlsConfig = transport_root.TlsConfig;
+
 fn loadTlsOptions(
     allocator: std.mem.Allocator,
     io: std.Io,
-    tls: ?@import("root.zig").TlsConfig,
+    tls: ?TlsConfig,
 ) !LoadedTls {
     const config = tls orelse return .{};
     if (config.insecure_skip_verify) return .{ .options = .{ .verify = .none } };
@@ -205,14 +211,16 @@ fn loadTlsOptions(
 
 test "httpx backend rejects mutual TLS before any network call" {
     const testing = std.testing;
-    const uri = try std.Uri.parse("http://127.0.0.1:1/v1/traces");
     const config: OtlpExporterConfig = .{
         .io = std.testing.io,
         .tls_config = .{ .cert_file = "/nonexistent/cert.pem", .key_file = "/nonexistent/key.pem" },
     };
+    // The guard lives in the shared `postWithPerform` loop, so it is
+    // exercised through the public `post` entry point, before any client
+    // (or network) exists.
     try testing.expectError(
         error.MutualTlsUnsupported,
-        performHttpx(testing.allocator, testing.allocator, config, "http://127.0.0.1:1/v1/traces", uri, "application/x-protobuf", &.{}, "payload", 1000),
+        post(testing.allocator, testing.allocator, config, "http://127.0.0.1:1/v1/traces", "application/x-protobuf", &.{}, "payload", "trace"),
     );
 }
 
@@ -381,8 +389,6 @@ fn scenarioConfig(io: std.Io, retry: transport_root.RetryConfig) transport_root.
         .retry_config = retry,
     };
 }
-
-const transport_root = @import("root.zig");
 
 test "httpx SC-6: a retryable failure issues exactly one request per otel-zig attempt" {
     const testing = std.testing;
@@ -623,9 +629,6 @@ test "httpx SC-1 e2e: one OTLP traces batch exports through the httpx backend" {
     try testing.expect(capture.body_len > 2);
     try testing.expect(std.mem.indexOf(u8, capture.bodySlice(), "e2e-httpx-span") != null);
 }
-
-const otel_sdk = @import("otel-sdk");
-const otlp_traces = @import("traces.zig");
 
 fn testSpan(name: []const u8) otel_sdk.trace.SpanData {
     return .{
