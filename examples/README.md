@@ -320,6 +320,21 @@ The OpenTelemetry Zig SDK implementation is **fully functional** across all thre
 - 🎯 **Memory safe** - Proper Zig memory management patterns
 - 📈 **Production ready** - Comprehensive error handling and resource cleanup
 
+## OTLP/HTTP transport backend selection
+
+The OTLP examples run against the default `std.http` transport. To run them
+through the opt-in httpx.zig backend, add `-Dotlp-httpx` to any example
+invocation:
+
+```sh
+zig build -Dotlp-httpx example-simple-trace-otlp
+zig build -Dotlp-httpx example-metrics-otlp
+zig build -Dotlp-httpx example-dns-query-std-log-otlp
+```
+
+The flag is compile-time: no example source changes. The httpx dependency is
+lazily resolved only under this flag, so a default build fetches nothing.
+
 ### Ready for Production Use
 
 The SDK is ready for:

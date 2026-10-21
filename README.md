@@ -220,6 +220,51 @@ The SDK is structed with subdirectories for `logs`, `metrics`, and `traces`, but
 
 The flow is: Provider → Processor/Reader → Exporter, with each component being responsible for a specific part of the telemetry pipeline.
 
+## OTLP/HTTP Transport Backends and the Retry Contract
+
+All OTLP signal exporters POST through one shared transport layer
+(`src/exporters/otlp/transport.zig`). Two backends implement it, selected at
+compile time — exporter code never knows which one is active:
+
+- **std.http (default)** — the standard-library client, per-attempt timeout
+  enforced with `std.Io.Select`.
+- **httpx.zig (`zig build -Dotlp-httpx`)** — an [httpx.zig](https://github.com/muhammad-fiaz/httpx.zig)
+  0.2.2-backed variant (`transport_httpx.zig`). The dependency is fetched
+  and compiled ONLY when the option is enabled; default builds are
+  unaffected. httpx.zig's own retry policy, connection-pool retry, and
+  interceptors are hard-disabled in the variant: each attempt issues exactly
+  one HTTP request, and retry decisions belong solely to the otel-zig retry
+  layer described below.
+
+**RetryConfig contract (binding for every transport backend):**
+
+- **Overall budget** — an export may retry only within
+  `min(RetryConfig.max_elapsed_time_millis, export_timeout_millis)`; a zero
+  `max_elapsed_time_millis` means the export timeout alone. When the budget
+  is exhausted, `error.ExportTimeout` (before the first attempt) or
+  `error.ExportRetryExhausted` (after a backoff that would overrun) is
+  returned — an attempt is never left hanging past the budget.
+- **Per-attempt timeout** — each HTTP request gets
+  `min(config.timeout_millis, remaining budget)`, shrunk as the budget
+  drains.
+- **Backoff with jitter** — exponential growth from
+  `initial_interval_millis`, multiplied by `multiplier` each retry up to
+  `max_interval_millis`. With `jitter` enabled the delay is drawn uniformly
+  from `[interval/2, interval*3/2]`.
+- **`Retry-After` precedence** — a numeric (integer-seconds) server
+  `Retry-After` header on a retryable response raises the delay to at least
+  that many milliseconds; it wins over the computed backoff for that
+  attempt. The HTTP-date form is not parsed and falls through to the
+  computed backoff (both backends).
+- **Retryable status set** — exactly HTTP 429, 502, 503, and 504 are
+  retried (see `transport.isRetryableStatus`). Every other non-2xx status
+  fails immediately and is reported through the error handler as
+  `ExportResult.failure`.
+
+Mutual TLS (client certificate + key) is unsupported on both backends; such
+a configuration returns `error.MutualTlsUnsupported` before any network
+call. Custom CA bundles are honored via `TlsConfig.ca_file`.
+
 ## Limitations
 
 - **No std.http integration** -- W3C trace context propagation (traceparent/tracestate) is fully implemented, but there is no automatic middleware for injecting/extracting headers from `std.http` requests. See [`examples/multithreaded_http_telemetry.zig`](examples/multithreaded_http_telemetry.zig) for a manual example.

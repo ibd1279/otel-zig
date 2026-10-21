@@ -20,6 +20,26 @@ pub const Response = struct {
     retry_after_millis: ?u64,
 };
 
+/// The public contract every transport backend's `post()` must satisfy.
+/// Assigning a backend's `post` to a `PostFn` coerces only when the full
+/// signature matches — parameter types exactly, and a return type compatible
+/// with `anyerror!ExportResult` — so backend signature drift is a compile
+/// error (enforced in `transport_backend.zig`). Note the return type is
+/// deliberately `anyerror`: the backends' inferred error sets differ (the
+/// retry-disabled path propagates raw network errors), and 0.17 cannot
+/// compare inferred sets; the coercion captures the shape contract without
+/// narrowing behavior.
+pub const PostFn = *const fn (
+    client_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
+    config: OtlpExporterConfig,
+    url: []const u8,
+    content_type: []const u8,
+    extra_headers: []const std.http.Header,
+    payload: []const u8,
+    signal: []const u8,
+) anyerror!ExportResult;
+
 /// Generic OTLP endpoints get the per-signal path appended; an endpoint that
 /// already names the signal (`append_signal_path = false`) is used as is.
 pub fn signalUrl(allocator: std.mem.Allocator, config: OtlpExporterConfig, signal_path: []const u8) ![]u8 {
@@ -91,6 +111,54 @@ pub fn post(
     payload: []const u8,
     signal: []const u8,
 ) !ExportResult {
+    return postWithPerform(performWithTimeout, client_allocator, allocator, config, url, content_type, extra_headers, payload, signal);
+}
+
+/// One HTTP attempt as issued by a transport backend: exactly one request per
+/// call — all retry, timeout-budget, and backoff decisions belong to
+/// `postWithPerform` below. Both the std.http backend and the httpx.zig
+/// backend (`-Dotlp-httpx`) implement this shape.
+pub const PerformFn = *const fn (
+    client_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
+    config: OtlpExporterConfig,
+    url: []const u8,
+    uri: std.Uri,
+    content_type: []const u8,
+    extra_headers: []const std.http.Header,
+    payload: []const u8,
+    timeout_ms: u64,
+) anyerror!Response;
+
+/// The backend-agnostic retry loop — the ONLY retry layer in otel-zig.
+/// Every transport backend (std.http, httpx.zig) must route its attempts
+/// through here so retry semantics stay identical (REQ-4 of the retry
+/// contract):
+///   - Overall budget: `min(retry_config.max_elapsed_time_millis,
+///     export_timeout_millis)`; a zero max_elapsed_time_millis means the
+///     export timeout alone.
+///   - Per-attempt timeout: `min(config.timeout_millis, remaining budget)`,
+///     shrunk as the budget drains; a budget-expired attempt is abandoned
+///     with `error.ExportTimeout`, never left hanging.
+///   - Backoff: exponential from `initial_interval_millis`, multiplied by
+///     `multiplier` up to `max_interval_millis`, with uniform jitter in
+///     [interval/2, interval*3/2] when `jitter` is set.
+///   - `Retry-After`: a server-provided value raises the delay to at least
+///     that many milliseconds (it wins over the computed backoff, per
+///     attempt).
+///   - Retryable statuses: exactly 429, 502, 503, 504 (`isRetryableStatus`).
+///     Everything else fails immediately.
+pub fn postWithPerform(
+    comptime perform_fn: PerformFn,
+    client_allocator: std.mem.Allocator,
+    allocator: std.mem.Allocator,
+    config: OtlpExporterConfig,
+    url: []const u8,
+    content_type: []const u8,
+    extra_headers: []const std.http.Header,
+    payload: []const u8,
+    signal: []const u8,
+) !ExportResult {
     const uri = std.Uri.parse(url) catch |err| {
         error_handler.reportError(.{
             .component = .exporter,
@@ -103,6 +171,16 @@ pub fn post(
         return err;
     };
 
+    // Mutual TLS is unsupported on every backend: reject a client cert/key
+    // configuration before any client (or network) exists (REQ-6/SC-12).
+    // Kept here — in the backend-agnostic retry loop — so parity is
+    // structural and a new backend cannot forget the guard.
+    if (config.tls_config) |tls| {
+        if (tls.cert_file != null and tls.key_file != null) {
+            return error.MutualTlsUnsupported;
+        }
+    }
+
     const started_ns = std.Io.Timestamp.now(config.io, .awake).nanoseconds;
     const retry_budget_ms = if (config.retry_config.max_elapsed_time_millis == 0)
         config.export_timeout_millis
@@ -113,7 +191,7 @@ pub fn post(
         const remaining_ms = remainingMillis(config.io, started_ns, retry_budget_ms);
         if (remaining_ms == 0) return error.ExportTimeout;
         const request_timeout_ms = @min(config.timeout_millis, remaining_ms);
-        const response = performWithTimeout(
+        const response = perform_fn(
             client_allocator,
             allocator,
             config,
@@ -169,9 +247,50 @@ fn performWithTimeout(
     payload: []const u8,
     timeout_ms: u64,
 ) !Response {
-    const Run = struct {
-        fn run(
-            run_client_allocator: std.mem.Allocator,
+    return attemptWithTimeout(config, timeout_ms, Run.run, .{ client_allocator, allocator, config, url, uri, content_type, extra_headers, payload, timeout_ms });
+}
+
+/// Runs one attempt function under the per-attempt deadline: the attempt and
+/// a timeout sleep race on `config.io`; a timeout abandons the attempt with
+/// `error.Timeout`. Backends share this so the budget semantics of REQ-4 are
+/// enforced uniformly regardless of whether the backend can apply its own
+/// socket timeout.
+pub fn attemptWithTimeout(
+    config: OtlpExporterConfig,
+    timeout_ms: u64,
+    comptime attempt_fn: anytype,
+    args: anytype,
+) !Response {
+    const Outcome = union(enum) {
+        request: anyerror!Response,
+        timeout: std.Io.Cancelable!void,
+    };
+    var outcomes: [2]Outcome = undefined;
+    var pending = std.Io.Select(Outcome).init(config.io, &outcomes);
+    // Must be `concurrent`, not `async`: `Io.groupAsync` may run the function
+    // inline on the calling thread (Threaded does so at its async_limit), which
+    // would block the caller until the attempt finishes and make the timeout
+    // branch unreachable. `concurrent` guarantees a unit of concurrency.
+    try pending.concurrent(.request, attempt_fn, args);
+    try pending.concurrent(.timeout, std.Io.sleep, .{
+        config.io,
+        .{ .nanoseconds = @intCast(timeout_ms *| std.time.ns_per_ms) },
+        .awake,
+    });
+    const result = switch (try pending.await()) {
+        .request => |request_result| try request_result,
+        .timeout => {
+            pending.cancelDiscard();
+            return error.Timeout;
+        },
+    };
+    pending.cancelDiscard();
+    return result;
+}
+
+const Run = struct {
+    fn run(
+        run_client_allocator: std.mem.Allocator,
             alloc: std.mem.Allocator,
             run_config: OtlpExporterConfig,
             request_url_unused: []const u8,
@@ -242,32 +361,6 @@ fn performWithTimeout(
             };
         }
     };
-    const Outcome = union(enum) {
-        request: anyerror!Response,
-        timeout: std.Io.Cancelable!void,
-    };
-    var outcomes: [2]Outcome = undefined;
-    var pending = std.Io.Select(Outcome).init(config.io, &outcomes);
-    // Must be `concurrent`, not `async`: `Io.groupAsync` may run the function
-    // inline on the calling thread (Threaded does so at its async_limit), which
-    // would block the caller until the attempt finishes and make the timeout
-    // branch unreachable. `concurrent` guarantees a unit of concurrency.
-    try pending.concurrent(.request, Run.run, .{ client_allocator, allocator, config, url, uri, content_type, extra_headers, payload, timeout_ms });
-    try pending.concurrent(.timeout, std.Io.sleep, .{
-        config.io,
-        .{ .nanoseconds = @intCast(timeout_ms *| std.time.ns_per_ms) },
-        .awake,
-    });
-    const result = switch (try pending.await()) {
-        .request => |request_result| try request_result,
-        .timeout => {
-            pending.cancelDiscard();
-            return error.Timeout;
-        },
-    };
-    pending.cancelDiscard();
-    return result;
-}
 
 pub fn isRetryableStatus(status: std.http.Status) bool {
     return switch (status) {

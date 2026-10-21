@@ -36,7 +36,7 @@ const otel_sdk = @import("otel-sdk");
 // Re-export types
 pub const OtlpLogExporter = @import("logs.zig").OtlpLogExporter;
 pub const OtlpTraceExporter = @import("traces.zig").OtlpTraceExporter;
-pub const transport = @import("transport.zig");
+pub const transport = @import("transport_backend.zig").transport;
 pub const OtlpMetricExporter = @import("metrics.zig").OtlpMetricExporter;
 
 // Re-export creation functions
@@ -106,6 +106,21 @@ pub const TlsConfig = struct {
     key_file: ?[]const u8 = null,
 };
 
+/// Retry/backoff configuration for OTLP exports.
+///
+/// This is the backend-agnostic retry contract every transport backend
+/// (default std.http and opt-in httpx.zig via `-Dotlp-httpx`) must honor;
+/// see the "OTLP/HTTP Transport Backends and the Retry Contract" section in
+/// README.md for the full normative text:
+///   - Overall budget: `min(max_elapsed_time_millis, export_timeout_millis)`;
+///     a zero `max_elapsed_time_millis` means the export timeout alone.
+///   - Per-attempt timeout: `min(timeout_millis, remaining budget)`.
+///   - Backoff: exponential from `initial_interval_millis` scaled by
+///     `multiplier` up to `max_interval_millis`; with `jitter` set the delay
+///     is uniform in `[interval/2, interval*3/2]`.
+///   - `Retry-After`: a server-provided value on a retryable response wins
+///     over the computed backoff for that attempt.
+///   - Retryable statuses: exactly 429, 502, 503, 504.
 pub const RetryConfig = struct {
     enabled: bool = true,
     initial_interval_millis: u64 = 5000,
