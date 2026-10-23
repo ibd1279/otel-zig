@@ -34,12 +34,25 @@ comptime {
         @compileError("OTLP transport backends diverged: Response types differ between the default and selected backend");
     }
     const re_exports = [_][]const u8{
-        "signalUrl",   "joinSignalPath", "isRetryableStatus",
-        "retryDelay",  "nextInterval",
+        "signalUrl",  "joinSignalPath", "isRetryableStatus",
+        "retryDelay", "nextInterval",
     };
     for (re_exports) |name| {
         if (!@hasDecl(transport, name)) {
             @compileError("OTLP transport backend is missing the shared retry-layer re-export: " ++ name);
+        }
+    }
+
+    // Deliberate extension (decision D3/D4): when the flag is on, BOTH
+    // httpx-family backends must coerce to the shared PostFn contract —
+    // the OTLP/HTTP variant above and the OTLP/gRPC variant in
+    // transport_grpc.zig. The default build compiles neither, so this block
+    // never references httpx there.
+    if (build_options.otlp_httpx) {
+        const grpc_post: base.PostFn = &transport.grpc.post;
+        _ = grpc_post;
+        if (@TypeOf(transport.grpc.Response) != @TypeOf(base.Response)) {
+            @compileError("OTLP transport backends diverged: the gRPC backend's Response type differs from the shared contract");
         }
     }
 }

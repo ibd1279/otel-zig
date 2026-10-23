@@ -12,11 +12,24 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const io = init.io;
 
-    // Set up trace provider using the new setupGlobalProvider pattern
+    // Set up trace provider using the new setupGlobalProvider pattern.
+    // The wire protocol follows OTEL_EXPORTER_OTLP_PROTOCOL (the OTEL
+    // convention): set OTEL_EXPORTER_OTLP_PROTOCOL=grpc to export over
+    // OTLP/gRPC (port 4317, httpx h2 backend — requires -Dotlp-httpx);
+    // the default remains OTLP/HTTP on 4318.
+    const grpc_protocol = if (otel_sdk.common.getEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL")) |value| blk: {
+        defer std.heap.page_allocator.free(value);
+        break :blk std.mem.eql(u8, value, "grpc");
+    } else false;
+    const exporter_config: otel_exporters.otlp.OtlpExporterConfig = if (grpc_protocol) .{
+        .io = io,
+        .endpoint = "http://localhost:4317",
+        .protocol = .grpc,
+    } else .{ .io = io };
     const concrete_provider = try otel_sdk.trace.setupGlobalProvider(
         init,
         .{otel_sdk.trace.BasicSpanProcessor.PipelineStep.init({})
-            .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(.{ .io = io }))},
+            .flowTo(otel_exporters.otlp.OtlpTraceExporter.PipelineStep.init(exporter_config))},
         null,
     );
     defer {

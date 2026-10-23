@@ -38,9 +38,15 @@ pub const isRetryableStatus = base.isRetryableStatus;
 pub const retryDelay = base.retryDelay;
 pub const nextInterval = base.nextInterval;
 
+/// The gRPC sibling backend: compiled in TOGETHER with this file behind the
+/// single `-Dotlp-httpx` flag; `post` dispatches on the runtime protocol.
+pub const grpc = @import("transport_grpc.zig");
+
 /// POST `payload` to `url` via httpx.zig, retrying through the shared
 /// otel-zig retry layer only. Signature and return contract match the
-/// default std.http transport exactly.
+/// default std.http transport exactly. Runtime protocol dispatch (decision
+/// D3): `.grpc` routes to the gRPC backend, `.http` (default) to the
+/// OTLP/HTTP path below.
 pub fn post(
     client_allocator: std.mem.Allocator,
     allocator: std.mem.Allocator,
@@ -51,6 +57,7 @@ pub fn post(
     payload: []const u8,
     signal: []const u8,
 ) !ExportResult {
+    if (config.protocol == .grpc) return grpc.post(client_allocator, allocator, config, url, content_type, extra_headers, payload, signal);
     return base.postWithPerform(performHttpx, client_allocator, allocator, config, url, content_type, extra_headers, payload, signal);
 }
 
@@ -156,10 +163,19 @@ fn httpxAttempt(
     const body = try allocator.dupe(u8, response.body);
     errdefer allocator.free(body);
     return .{
-        .status = @enumFromInt(response.status),
+        .status = safeHttpStatus(response.status),
         .body = body,
         .retry_after_millis = retry_after_millis,
     };
+}
+
+/// Converts a raw peer-supplied HTTP status (u16) to `std.http.Status`
+/// without panicking: 100–599 converts directly; anything else (a hostile or
+/// broken peer sending 0, 60, or 600+) becomes the synthetic non-retryable
+/// 500 instead of tripping an invalid-enum / `@intCast` safety panic.
+pub fn safeHttpStatus(raw: u16) std.http.Status {
+    if (raw >= 100 and raw <= 599) return @fromBackingInt(@intCast(raw));
+    return .internal_server_error;
 }
 
 fn readPemFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8 {
@@ -178,12 +194,13 @@ fn readPemFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8
 /// TLS options for one httpx attempt, plus the PEM buffer that backs
 /// `.caBundle` verification. `httpx.TlsOptions.caPem` is a borrowed slice,
 /// so the buffer is owned here and must outlive the `client.fetch()` that
-/// consumes the options — `deinit` is the only place it is freed.
-const LoadedTls = struct {
+/// consumes the options — `deinit` is the only place it is freed. The gRPC
+/// backend reuses this pattern (REQ-8) through these `pub` declarations.
+pub const LoadedTls = struct {
     options: ?httpx.TlsOptions = null,
     pem: ?[]u8 = null,
 
-    fn deinit(self: *LoadedTls, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *LoadedTls, allocator: std.mem.Allocator) void {
         if (self.pem) |buffer| allocator.free(buffer);
         self.pem = null;
     }
@@ -194,7 +211,7 @@ const otlp_traces = @import("traces.zig");
 
 const TlsConfig = transport_root.TlsConfig;
 
-fn loadTlsOptions(
+pub fn loadTlsOptions(
     allocator: std.mem.Allocator,
     io: std.Io,
     tls: ?TlsConfig,

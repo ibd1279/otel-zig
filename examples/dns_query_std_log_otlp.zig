@@ -22,11 +22,23 @@ pub fn main(init: std.process.Init) !void {
     // Clean up global providers at program exit
     defer otel_api.provider_registry.unsetAllProviders();
 
-    // Setup global OTel logging provider with OTLP exporter
+    // Setup global OTel logging provider with OTLP exporter. The wire
+    // protocol follows OTEL_EXPORTER_OTLP_PROTOCOL: set it to "grpc" to
+    // export over OTLP/gRPC (port 4317, httpx h2 backend — requires
+    // -Dotlp-httpx); the default remains OTLP/HTTP on 4318.
+    const grpc_protocol = if (otel_sdk.common.getEnvironmentVariable("OTEL_EXPORTER_OTLP_PROTOCOL")) |value| blk: {
+        defer std.heap.page_allocator.free(value);
+        break :blk std.mem.eql(u8, value, "grpc");
+    } else false;
+    const exporter_config: otel_exporters.otlp.OtlpExporterConfig = if (grpc_protocol) .{
+        .io = io,
+        .endpoint = "http://localhost:4317",
+        .protocol = .grpc,
+    } else .{ .io = io };
     const provider = try otel_sdk.logs.setupGlobalProvider(
         init,
         .{otel_sdk.logs.SimpleLogRecordProcessor.PipelineStep.init({})
-            .flowTo(otel_exporters.otlp.OtlpLogExporter.PipelineStep.init(.{ .io = io }))},
+            .flowTo(otel_exporters.otlp.OtlpLogExporter.PipelineStep.init(exporter_config))},
         null,
     );
     defer {
