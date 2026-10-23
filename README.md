@@ -236,6 +236,30 @@ compile time — exporter code never knows which one is active:
   one HTTP request, and retry decisions belong solely to the otel-zig retry
   layer described below.
 
+With `-Dotlp-httpx` enabled, TWO httpx-family backends are compiled in
+together and the wire protocol is chosen at RUNTIME by
+`OtlpExporterConfig.protocol` (`.http` default, `.grpc`), mirroring the
+`OTEL_EXPORTER_OTLP_PROTOCOL` convention:
+
+- **OTLP/HTTP (`.http`)** — the httpx variant above, HTTP/1.1 POST, default
+  port 4318.
+- **OTLP/gRPC (`.grpc`)** — `transport_grpc.zig`, a gRPC unary transport over
+  httpx's HTTP/2 client (h2c prior knowledge over plain TCP; h2 negotiated
+  via ALPN over TLS). Requests are framed as 1-byte compression flag (zero)
+  + 4-byte big-endian length + protobuf payload, sent with
+  `content-type: application/grpc` and `te: trailers` to the per-signal
+  gRPC method path
+  (`/opentelemetry.proto.collector.<signal>.v1.<Signal>Service/Export`);
+  a port-less endpoint defaults to 4317. On the response, `grpc-status`
+  (read from the merged initial+trailer HEADERS) maps to a synthetic HTTP
+  status fed to the shared retry path: 0→200, 8→429, 14→503, 4→504,
+  16→401, 1 Canceled→499-equivalent; ANY unmapped code becomes a synthetic
+  500 (non-retryable, `.unknown` error class). `grpc-message` is surfaced
+  through the error context and `grpc-retry-after` maps to
+  `retry_after_millis`. A default build (option off) rejects
+  `protocol = .grpc` with `error.UnsupportedTransport` before any network
+  call. gRPC client-side compression is not supported.
+
 **RetryConfig contract (binding for every transport backend):**
 
 - **Overall budget** — an export may retry only within
@@ -261,9 +285,13 @@ compile time — exporter code never knows which one is active:
   fails immediately and is reported through the error handler as
   `ExportResult.failure`.
 
-Mutual TLS (client certificate + key) is unsupported on both backends; such
+Mutual TLS (client certificate + key) is unsupported on every backend; such
 a configuration returns `error.MutualTlsUnsupported` before any network
 call. Custom CA bundles are honored via `TlsConfig.ca_file`.
+
+A TLS e2e scenario against the local Datadog agent's gRPC receiver is
+authored in [`docs/grpc-tls-gate.md`](docs/grpc-tls-gate.md) (requires the
+operator's sudo to reconfigure the agent).
 
 ## Limitations
 

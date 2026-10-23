@@ -42,9 +42,31 @@ pub const PostFn = *const fn (
 
 /// Generic OTLP endpoints get the per-signal path appended; an endpoint that
 /// already names the signal (`append_signal_path = false`) is used as is.
+/// Protocol-aware (REQ-1/SC-2, decision D6): with `.grpc` the per-signal
+/// path becomes the OTLP gRPC method path and a port-less authority defaults
+/// to 4317; with `.http` it defaults to 4318. No cross-protocol leakage.
 pub fn signalUrl(allocator: std.mem.Allocator, config: OtlpExporterConfig, signal_path: []const u8) ![]u8 {
     if (!config.append_signal_path) return allocator.dupe(u8, config.endpoint);
-    return joinSignalPathWithOtlpPort(allocator, config.endpoint, signal_path);
+    if (config.protocol == .grpc) {
+        const method = grpcMethodPath(signal_path) orelse return error.GrpcMethodPathUnknown;
+        return joinWithPort(allocator, config.endpoint, method, @import("root.zig").grpc_default_port);
+    }
+    return joinWithPort(allocator, config.endpoint, signal_path, @import("root.zig").http_default_port);
+}
+
+/// Maps an OTLP/HTTP per-signal path to the OTLP gRPC method path
+/// (`/opentelemetry.proto.collector.<signal>.v1.<Signal>Service/Export`).
+/// Returns null for a path that is not one of the three OTLP signals.
+pub fn grpcMethodPath(signal_path: []const u8) ?[]const u8 {
+    const table = [_]struct { path: []const u8, method: []const u8 }{
+        .{ .path = "/v1/traces", .method = "/opentelemetry.proto.collector.trace.v1.TraceService/Export" },
+        .{ .path = "/v1/metrics", .method = "/opentelemetry.proto.collector.metrics.v1.MetricsService/Export" },
+        .{ .path = "/v1/logs", .method = "/opentelemetry.proto.collector.logs.v1.LogsService/Export" },
+    };
+    for (table) |entry| {
+        if (std.mem.eql(u8, signal_path, entry.path)) return entry.method;
+    }
+    return null;
 }
 
 pub fn joinSignalPath(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8) ![]u8 {
@@ -56,12 +78,12 @@ pub fn joinSignalPath(allocator: std.mem.Allocator, endpoint: []const u8, path: 
 }
 
 /// Like `joinSignalPath`, but ports the trunk behavior of defaulting a
-/// port-less authority to the OTLP/HTTP port (4318) instead of letting
+/// port-less authority to the protocol's OTLP default port instead of letting
 /// std.http fall back to the scheme default (80/443) — a port-less
-/// `http://collector` must reach :4318.
-fn joinSignalPathWithOtlpPort(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8) ![]u8 {
+/// `http://collector` must reach :4318 (HTTP) or :4317 (gRPC).
+fn joinWithPort(allocator: std.mem.Allocator, endpoint: []const u8, path: []const u8, default_port: u16) ![]u8 {
     const trimmed = std.mem.trimEnd(u8, endpoint, "/");
-    const authority = try defaultOtlpAuthority(allocator, trimmed);
+    const authority = try defaultOtlpAuthority(allocator, trimmed, default_port);
     defer allocator.free(authority);
     if (path.len == 0) return allocator.dupe(u8, authority);
     return std.fmt.allocPrint(allocator, "{s}/{s}", .{
@@ -70,10 +92,10 @@ fn joinSignalPathWithOtlpPort(allocator: std.mem.Allocator, endpoint: []const u8
     });
 }
 
-/// Returns the endpoint with `:4318` inserted when the URL has an authority
-/// without an explicit port; otherwise a copy of `endpoint` is returned
-/// unchanged (either way the result is owned by `allocator`).
-fn defaultOtlpAuthority(allocator: std.mem.Allocator, endpoint: []const u8) ![]u8 {
+/// Returns the endpoint with `default_port` inserted when the URL has an
+/// authority without an explicit port; otherwise a copy of `endpoint` is
+/// returned unchanged (either way the result is owned by `allocator`).
+fn defaultOtlpAuthority(allocator: std.mem.Allocator, endpoint: []const u8, default_port: u16) ![]u8 {
     const scheme_end = std.mem.indexOf(u8, endpoint, "://") orelse return allocator.dupe(u8, endpoint);
     var authority_start = scheme_end + 3;
     // Skip userinfo: the port separator we look for comes after any '@'.
@@ -91,8 +113,9 @@ fn defaultOtlpAuthority(allocator: std.mem.Allocator, endpoint: []const u8) ![]u
     else
         std.mem.indexOfScalar(u8, authority, ':') != null;
     if (has_port) return allocator.dupe(u8, endpoint);
-    return std.fmt.allocPrint(allocator, "{s}:4318{s}", .{
+    return std.fmt.allocPrint(allocator, "{s}:{d}{s}", .{
         endpoint[0..authority_end],
+        default_port,
         endpoint[authority_end..],
     });
 }
@@ -111,6 +134,19 @@ pub fn post(
     payload: []const u8,
     signal: []const u8,
 ) !ExportResult {
+    // The default std.http transport carries OTLP/HTTP only. OTLP/gRPC needs
+    // the h2-capable httpx-family backends (opt-in `-Dotlp-httpx`); without
+    // it a `.grpc` configuration fails fast here, never on the wire.
+    if (config.protocol == .grpc) {
+        error_handler.reportError(.{
+            .component = .exporter,
+            .operation = "otlp_transport_selection",
+            .error_type = .configuration,
+            .message = "OTLP/gRPC protocol requires the -Dotlp-httpx build option",
+            .context = url,
+        });
+        return error.UnsupportedTransport;
+    }
     return postWithPerform(performWithTimeout, client_allocator, allocator, config, url, content_type, extra_headers, payload, signal);
 }
 
@@ -291,76 +327,76 @@ pub fn attemptWithTimeout(
 const Run = struct {
     fn run(
         run_client_allocator: std.mem.Allocator,
-            alloc: std.mem.Allocator,
-            run_config: OtlpExporterConfig,
-            request_url_unused: []const u8,
-            request_uri: std.Uri,
-            request_content_type: []const u8,
-            request_headers: []const std.http.Header,
-            request_payload: []const u8,
-            request_timeout_ms: u64,
-        ) !Response {
-            // The attempt deadline is applied by the Select wrapper below, not
-            // inside run(); upstream's curl path consumed it itself.
-            _ = request_url_unused;
-            _ = request_timeout_ms;
-            // NOTE: upstream (aliniaai) routes mutual-TLS requests (client
-            // cert+key in tls_config) through a libcurl transport here. This
-            // tree deliberately stays on native std.http; mTLS client certs
-            // are unsupported until std.http grows client-cert support or a
-            // curl dependency is deliberately adopted.
-            if (run_config.tls_config) |tls| {
-                if (tls.cert_file != null and tls.key_file != null) {
-                    return error.MutualTlsUnsupported;
-                }
+        alloc: std.mem.Allocator,
+        run_config: OtlpExporterConfig,
+        request_url_unused: []const u8,
+        request_uri: std.Uri,
+        request_content_type: []const u8,
+        request_headers: []const std.http.Header,
+        request_payload: []const u8,
+        request_timeout_ms: u64,
+    ) !Response {
+        // The attempt deadline is applied by the Select wrapper below, not
+        // inside run(); upstream's curl path consumed it itself.
+        _ = request_url_unused;
+        _ = request_timeout_ms;
+        // NOTE: upstream (aliniaai) routes mutual-TLS requests (client
+        // cert+key in tls_config) through a libcurl transport here. This
+        // tree deliberately stays on native std.http; mTLS client certs
+        // are unsupported until std.http grows client-cert support or a
+        // curl dependency is deliberately adopted.
+        if (run_config.tls_config) |tls| {
+            if (tls.cert_file != null and tls.key_file != null) {
+                return error.MutualTlsUnsupported;
             }
-            var client = std.http.Client{ .allocator = run_client_allocator, .io = run_config.io };
-            defer client.deinit();
-            if (run_config.tls_config) |tls| {
-                if (tls.ca_file) |ca_file| {
-                    const absolute = try std.Io.Dir.cwd().realPathFileAlloc(run_config.io, ca_file, alloc);
-                    defer alloc.free(absolute);
-                    const now = std.Io.Clock.real.now(run_config.io);
-                    try client.ca_bundle.addCertsFromFilePathAbsolute(run_client_allocator, run_config.io, now, absolute);
-                    client.now = now;
-                }
-            }
-            var request = try client.request(.POST, request_uri, .{
-                .headers = .{
-                    .content_type = .{ .override = request_content_type },
-                    .user_agent = .{ .override = "otel-zig-otlp" },
-                },
-                .extra_headers = request_headers,
-            });
-            defer request.deinit();
-            request.transfer_encoding = .{ .content_length = request_payload.len };
-            var body = try request.sendBodyUnflushed(&.{});
-            try body.writer.writeAll(request_payload);
-            try body.end();
-            try request.connection.?.flush();
-
-            var response = try request.receiveHead(&.{});
-            const status = response.head.status;
-            var retry_after_millis: ?u64 = null;
-            var headers = response.head.iterateHeaders();
-            while (headers.next()) |header| {
-                if (std.ascii.eqlIgnoreCase(header.name, "retry-after")) {
-                    const seconds = std.fmt.parseInt(u64, std.mem.trim(u8, header.value, " \t"), 10) catch break;
-                    retry_after_millis = seconds *| 1000;
-                    break;
-                }
-            }
-            var response_body = std.Io.Writer.Allocating.init(alloc);
-            errdefer response_body.deinit();
-            const reader = response.reader(&.{});
-            _ = try reader.streamRemaining(&response_body.writer);
-            return .{
-                .status = status,
-                .body = try response_body.toOwnedSlice(),
-                .retry_after_millis = retry_after_millis,
-            };
         }
-    };
+        var client = std.http.Client{ .allocator = run_client_allocator, .io = run_config.io };
+        defer client.deinit();
+        if (run_config.tls_config) |tls| {
+            if (tls.ca_file) |ca_file| {
+                const absolute = try std.Io.Dir.cwd().realPathFileAlloc(run_config.io, ca_file, alloc);
+                defer alloc.free(absolute);
+                const now = std.Io.Clock.real.now(run_config.io);
+                try client.ca_bundle.addCertsFromFilePathAbsolute(run_client_allocator, run_config.io, now, absolute);
+                client.now = now;
+            }
+        }
+        var request = try client.request(.POST, request_uri, .{
+            .headers = .{
+                .content_type = .{ .override = request_content_type },
+                .user_agent = .{ .override = "otel-zig-otlp" },
+            },
+            .extra_headers = request_headers,
+        });
+        defer request.deinit();
+        request.transfer_encoding = .{ .content_length = request_payload.len };
+        var body = try request.sendBodyUnflushed(&.{});
+        try body.writer.writeAll(request_payload);
+        try body.end();
+        try request.connection.?.flush();
+
+        var response = try request.receiveHead(&.{});
+        const status = response.head.status;
+        var retry_after_millis: ?u64 = null;
+        var headers = response.head.iterateHeaders();
+        while (headers.next()) |header| {
+            if (std.ascii.eqlIgnoreCase(header.name, "retry-after")) {
+                const seconds = std.fmt.parseInt(u64, std.mem.trim(u8, header.value, " \t"), 10) catch break;
+                retry_after_millis = seconds *| 1000;
+                break;
+            }
+        }
+        var response_body = std.Io.Writer.Allocating.init(alloc);
+        errdefer response_body.deinit();
+        const reader = response.reader(&.{});
+        _ = try reader.streamRemaining(&response_body.writer);
+        return .{
+            .status = status,
+            .body = try response_body.toOwnedSlice(),
+            .retry_after_millis = retry_after_millis,
+        };
+    }
+};
 
 pub fn isRetryableStatus(status: std.http.Status) bool {
     return switch (status) {
@@ -402,6 +438,36 @@ fn sleepBeforeRetry(io: std.Io, started_ns: i96, budget_ms: u64, delay_ms: u64) 
     if (delay_ms >= remaining_ms) return false;
     io.sleep(.{ .nanoseconds = @intCast(delay_ms *| std.time.ns_per_ms) }, .awake) catch return false;
     return true;
+}
+
+test "default backend rejects a .grpc protocol configuration without a network call" {
+    const testing = std.testing;
+    const config: OtlpExporterConfig = .{
+        .io = std.testing.io,
+        .endpoint = "http://localhost:4317",
+        .protocol = .grpc,
+    };
+    try testing.expectError(
+        error.UnsupportedTransport,
+        post(testing.allocator, testing.allocator, config, "http://localhost:4317/opentelemetry.proto.collector.trace.v1.TraceService/Export", "application/grpc", &.{}, "payload", "trace"),
+    );
+}
+
+test "grpc method path mapping" {
+    const testing = std.testing;
+    try testing.expectEqualStrings(
+        "/opentelemetry.proto.collector.trace.v1.TraceService/Export",
+        grpcMethodPath("/v1/traces").?,
+    );
+    try testing.expectEqualStrings(
+        "/opentelemetry.proto.collector.metrics.v1.MetricsService/Export",
+        grpcMethodPath("/v1/metrics").?,
+    );
+    try testing.expectEqualStrings(
+        "/opentelemetry.proto.collector.logs.v1.LogsService/Export",
+        grpcMethodPath("/v1/logs").?,
+    );
+    try testing.expect(grpcMethodPath("/v1/custom") == null);
 }
 
 test "signal url preserves configured paths" {

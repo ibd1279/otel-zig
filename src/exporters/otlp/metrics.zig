@@ -11,6 +11,10 @@ const MetricType = otel_sdk.metrics.MetricType;
 const MetricExporter = otel_sdk.metrics.MetricExporter;
 const convert = @import("convert.zig");
 
+// Shared transport backend (backend-unaware; selected by build flag +
+// config.protocol at runtime).
+const otlp_transport = @import("transport_backend.zig").transport;
+
 // Import error handler for structured error reporting
 const error_handler = otel_api.common;
 
@@ -117,9 +121,6 @@ pub const OtlpMetricExporter = struct {
     }
 
     fn sendRequest(self: *OtlpMetricExporter, allocator: std.mem.Allocator, metrics_data: metrics_v1.MetricsData) !void {
-        var client = std.http.Client{ .allocator = allocator, .io = self.config.io };
-        defer client.deinit();
-
         // Serialize to binary protobuf
         var buffer = std.Io.Writer.Allocating.init(allocator);
         defer buffer.deinit();
@@ -127,67 +128,29 @@ pub const OtlpMetricExporter = struct {
         const protobuf_bytes = try buffer.toOwnedSlice();
         defer allocator.free(protobuf_bytes);
 
-        // Parse endpoint URL with detailed error context
-        const base_uri = std.Uri.parse(self.config.endpoint) catch |err| {
+        // Route through the shared transport layer like the traces and logs
+        // exporters: endpoint/method URL construction, per-attempt timeout,
+        // and retry semantics all come from the shared layer (previously this
+        // exporter used a bare std.http client with none of that).
+        const content_type: []const u8 = if (self.config.protocol == .grpc)
+            "application/grpc"
+        else
+            "application/x-protobuf";
+        const full_url = try otlp_transport.signalUrl(allocator, self.config, self.config.protocol_config.metrics_path);
+        defer allocator.free(full_url);
+
+        const result = otlp_transport.post(self.allocator, allocator, self.config, full_url, content_type, self.config.headers, protobuf_bytes, "metrics") catch |err| {
             error_handler.reportError(.{
                 .component = .exporter,
-                .operation = "otlp_metric_url_parsing",
-                .error_type = .configuration,
-                .message = "OTLP metrics URL parsing failed",
+                .operation = "otlp_metric_network",
+                .error_type = .network,
+                .message = "OTLP metrics network request failed",
                 .context = self.config.endpoint,
                 .source_error = err,
             });
-            return err;
-        };
-
-        // Build full URL with metrics path
-        const host_str = switch (base_uri.host.?) {
-            .raw => |raw| raw,
-            .percent_encoded => |encoded| encoded,
-        };
-        const scheme_str = if (base_uri.scheme.len > 0) base_uri.scheme else "http";
-        const full_url = try std.fmt.allocPrint(allocator, "{s}://{s}:{d}{s}", .{ scheme_str, host_str, base_uri.port orelse 4318, self.config.protocol_config.metrics_path });
-        defer allocator.free(full_url);
-
-        // Add custom headers from config (simplified approach)
-        var extra_headers = try allocator.alloc(std.http.Header, self.config.headers.len);
-        defer allocator.free(extra_headers);
-        for (self.config.headers, 0..) |header, h| {
-            extra_headers[h] = header;
-        }
-
-        // Create HTTP request
-        const full_uri = try std.Uri.parse(full_url);
-        var req = try client.request(.POST, full_uri, .{
-            .headers = .{
-                .content_type = .{ .override = "application/x-protobuf" },
-                .user_agent = .{ .override = "otel-zig-otlp" },
-            },
-            .extra_headers = extra_headers,
-        });
-        defer req.deinit();
-
-        // Set request headers
-        req.transfer_encoding = .{ .content_length = @intCast(protobuf_bytes.len) };
-
-        // Send request
-        var bw = try req.sendBodyUnflushed(&.{});
-        try bw.writer.writeAll(protobuf_bytes);
-        try bw.end();
-        try req.connection.?.flush();
-
-        const res = try req.receiveHead(&.{});
-
-        if (res.head.status != .ok) {
-            error_handler.reportError(.{
-                .component = .exporter,
-                .operation = "otlp_metric_response",
-                .error_type = .authentication,
-                .message = "OTLP metrics export failed with HTTP error",
-                .context = self.config.endpoint,
-            });
             return error.ExportFailed;
-        }
+        };
+        if (result != .success) return error.ExportFailed;
     }
 };
 

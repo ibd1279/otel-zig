@@ -51,6 +51,19 @@ pub const Transport = enum {
     http_json,
 };
 
+/// Runtime OTLP protocol selection (OtlpExporterConfig.protocol): which wire
+/// protocol the transport carries. Port defaulting is protocol-aware —
+/// 4317 for OTLP/gRPC, 4318 for OTLP/HTTP (REQ-1/SC-2, decision D6).
+pub const Protocol = enum {
+    http,
+    grpc,
+};
+
+/// The OTLP/gRPC default port (the OTLP standard receiver default).
+pub const grpc_default_port: u16 = 4317;
+/// The OTLP/HTTP default port.
+pub const http_default_port: u16 = 4318;
+
 // OTLP-specific configuration
 pub const OtlpExporterConfig = struct {
     /// Io handle required for HTTP transport.
@@ -61,6 +74,12 @@ pub const OtlpExporterConfig = struct {
 
     /// Transport mechanism
     transport: Transport = .http_protobuf,
+
+    /// Runtime transport-selection protocol (REQ-1 of the transport spec):
+    /// `.http` (OTLP/HTTP, default) or `.grpc` (OTLP/gRPC). Mirrors the
+    /// OTEL_EXPORTER_OTLP_PROTOCOL convention. `.grpc` requires the opt-in
+    /// `-Dotlp-httpx` build; the default std.http transport rejects it.
+    protocol: Protocol = .http,
 
     /// Headers for authentication/metadata
     headers: []const std.http.Header = &[_]std.http.Header{},

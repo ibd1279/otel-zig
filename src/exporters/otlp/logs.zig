@@ -124,7 +124,10 @@ pub const OtlpLogExporter = struct {
         const full_url = try otlp_transport.signalUrl(allocator, self.config, self.config.protocol_config.logs_path);
         defer allocator.free(full_url);
 
-        const content_type = switch (self.config.transport) {
+        // gRPC carries protobuf in the unary frame with application/grpc.
+        const content_type: []const u8 = if (self.config.protocol == .grpc)
+            "application/grpc"
+        else switch (self.config.transport) {
             .http_json => "application/json",
             .http_protobuf, .grpc => "application/x-protobuf",
         };
@@ -139,7 +142,12 @@ pub const OtlpLogExporter = struct {
     /// Chooses the wire format for the configured transport. This is the
     /// dispatch `exportRecords` performs; extracted so tests can exercise
     /// the transport->format mapping without a network endpoint.
+    ///
+    /// `protocol` overrides `transport`: once `.grpc` is selected the gRPC
+    /// unary frame always carries protobuf, regardless of the `transport`
+    /// setting (which only applies to the OTLP/HTTP path).
     fn convertForTransport(self: *OtlpLogExporter, allocator: std.mem.Allocator, records: []const LogRecord, resource: Resource) ![]u8 {
+        if (self.config.protocol == .grpc) return self.convertToProtobufFormat(allocator, records, resource);
         return switch (self.config.transport) {
             .http_json => self.convertToJsonFormat(allocator, records, resource),
             .http_protobuf, .grpc => self.convertToProtobufFormat(allocator, records, resource),
@@ -508,6 +516,22 @@ test "OtlpLogExporter transport dispatch selects the correct wire format" {
             },
         }
     }
+
+    // `protocol` overrides `transport`: with `.grpc` the unary frame always
+    // carries protobuf, even when `transport` is left at `.http_json`.
+    const override_transports = [_]Transport{ .http_json, .http_protobuf, .grpc };
+    for (override_transports) |transport| {
+        var arena = std.heap.ArenaAllocator.init(allocator);
+        defer arena.deinit();
+
+        var exporter = OtlpLogExporter.init(allocator, .{ .io = std.testing.io, .transport = transport, .protocol = .grpc });
+        const data = try exporter.convertForTransport(arena.allocator(), &[_]LogRecord{log_record}, resource);
+        try testing.expect(data.len > 0);
+        try testing.expect(std.mem.find(u8, data, "resourceLogs") == null);
+        var in: std.Io.Reader = .fixed(data);
+        const decoded = try logs_v1.LogsData.decode(&in, arena.allocator());
+        try testing.expectEqual(@as(usize, 1), decoded.resource_logs.items.len);
+    }
 }
 
 test "OtlpLogExporter exportRecords fails fast after shutdown without network" {
@@ -609,7 +633,7 @@ test "OtlpLogExporter severity mapping covers all spec levels" {
         // fatal=21..24). This catches arm-level typos like
         // .warn2 => .SEVERITY_NUMBER_WARN3 that a tag-only check misses.
         if (case.severity != .invalid) {
-            try testing.expectEqual(@intFromEnum(case.severity), @intFromEnum(mapped));
+            try testing.expectEqual(@backingInt(case.severity), @backingInt(mapped));
         }
     }
 }

@@ -135,21 +135,28 @@ pub const OtlpTraceExporter = struct {
     }
 
     fn sendRequest(self: *OtlpTraceExporter, allocator: std.mem.Allocator, traces_data: trace_v1.TracesData) !ExportResult {
-        const content_type: []const u8 = switch (self.config.transport) {
+        // Runtime protocol selection (REQ-1): exporter stays backend-unaware;
+        // the transport backend chosen by build flag + config.protocol carries
+        // the batch. gRPC always carries protobuf in the unary frame.
+        const is_grpc = self.config.protocol == .grpc;
+        if (is_grpc and self.config.compression != .none) {
+            // gRPC client-side compression is out of scope; fail loud instead
+            // of silently sending a mismatched content-encoding.
+            return error.GrpcCompressionUnsupported;
+        }
+        const content_type: []const u8 = if (is_grpc)
+            "application/grpc"
+        else switch (self.config.transport) {
             .http_protobuf => "application/x-protobuf",
             .http_json => "application/json",
             .grpc => return error.UnsupportedTransport,
         };
-        const encoded: []const u8 = switch (self.config.transport) {
-            .http_protobuf => encoded: {
-                var buffer = std.Io.Writer.Allocating.init(allocator);
-                defer buffer.deinit();
-                try traces_data.encode(&buffer.writer, allocator);
-                break :encoded try buffer.toOwnedSlice();
-            },
-            .http_json => try traces_data.jsonEncode(.{}, .{}, allocator),
-            .grpc => unreachable,
-        };
+        const encoded: []const u8 = if (is_grpc or self.config.transport == .http_protobuf) encoded: {
+            var buffer = std.Io.Writer.Allocating.init(allocator);
+            defer buffer.deinit();
+            try traces_data.encode(&buffer.writer, allocator);
+            break :encoded try buffer.toOwnedSlice();
+        } else try traces_data.jsonEncode(.{}, .{}, allocator);
         defer allocator.free(encoded);
 
         var compressed = std.Io.Writer.Allocating.init(allocator);
@@ -554,7 +561,7 @@ fn convertToOtlpFormat(allocator: std.mem.Allocator, spans: []const otel_sdk.tra
                 .start_time_unix_nano = @intCast(span_data.start_time.toNanoseconds()),
                 .end_time_unix_nano = @intCast(span_data.end_time.toNanoseconds()),
                 .flags = @intCast(span_data.ctx.trace_flags),
-                .kind = @enumFromInt(@intFromEnum(span_data.kind)),
+                .kind = @fromBackingInt(@intCast(@backingInt(span_data.kind))),
                 .trace_state = if (span_data.ctx.trace_state) |ts| try allocator.dupe(u8, ts) else &.{},
                 .dropped_attributes_count = 0,
                 .dropped_events_count = 0,
@@ -564,7 +571,7 @@ fn convertToOtlpFormat(allocator: std.mem.Allocator, spans: []const otel_sdk.tra
             // sub objects
             if (span_data.status.code != .unset) {
                 span.status = trace_v1.Status{
-                    .code = @enumFromInt(@intFromEnum(span_data.status.code)),
+                    .code = @fromBackingInt(@intCast(@backingInt(span_data.status.code))),
                     .message = if (span_data.status.description) |desc| try allocator.dupe(u8, desc) else &.{},
                 };
             }
