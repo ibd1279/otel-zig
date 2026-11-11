@@ -303,6 +303,12 @@ pub fn attemptWithTimeout(
     };
     var outcomes: [2]Outcome = undefined;
     var pending = std.Io.Select(Outcome).init(config.io, &outcomes);
+    // Every exit path must drain the select. `concurrent` can fail after the
+    // first task is already live, and any early return would leave that task
+    // pushing its outcome into a queue that dies with this stack frame --
+    // the task then writes through a recycled stack slot and aborts the
+    // process (index out of bounds inside Io.TypeErasedQueue.puttableSlice).
+    defer pending.cancelDiscard();
     // Must be `concurrent`, not `async`: `Io.groupAsync` may run the function
     // inline on the calling thread (Threaded does so at its async_limit), which
     // would block the caller until the attempt finishes and make the timeout
