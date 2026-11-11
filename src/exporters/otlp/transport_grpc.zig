@@ -266,7 +266,7 @@ fn grpcAttempt(
     // is literal-only and rejects names like "localhost").
     var sock = httpx.tcp.connect(httpx_io, host, port) catch |literal_err| blk: {
         if (literal_err != error.HostUnreachable) return literal_err;
-        var resolver = httpx.resolve.Resolver.init(client_allocator, httpx_io);
+        var resolver = httpx.net.resolve.Resolver.init(client_allocator, httpx_io);
         const addrs = resolver.lookup(host, .{ .port = port }) catch return error.ConnectFailed;
         defer client_allocator.free(addrs);
         var last_err: anyerror = error.ConnectFailed;
@@ -292,11 +292,11 @@ fn grpcAttempt(
             return mapTlsError(err);
         };
         defer tls_owner.deinit();
-        const tls_options = loaded_tls.options orelse httpx.TlsOptions{};
+        const tls_verify: httpx.tls.VerifyMode = if (loaded_tls.skip_verify) .none else .caBundle;
         // httpx's native TLS client takes socket ownership on success.
         tls_conn = tls_owner.connect(&sock, host, .{
-            .verify = tls_options.verify,
-            .caPem = tls_options.caPem,
+            .verify = tls_verify,
+            .caPem = loaded_tls.pem,
             .alpn = &.{.h2},
             .transport = .native,
         }) catch |err| {
@@ -328,6 +328,9 @@ fn grpcAttempt(
         if (https) "https" else "http",
         authority,
         framed,
+        // httpx 0.2.3 added an explicit response cap; OTLP gRPC replies are a
+        // few dozen bytes, so 8 MiB is generous rather than restrictive.
+        8 * 1024 * 1024,
     );
     defer h2_response.deinit();
 

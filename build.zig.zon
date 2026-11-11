@@ -43,8 +43,8 @@
             .hash = "protobuf-5.0.0-0e82aitNKACdM38Q5mbHhtsB_4aar09scp05zAOKV-Ao",
         },
         .httpx = .{
-            .url = "git+https://github.com/muhammad-fiaz/httpx.zig#deacfacea9a83c060d65ad65da1e40fa2edadc43",
-            .hash = "httpx-0.2.2-8qj2elvJGAGEGluJssHtz2AqxReKPa_LjDxnygVfefMq",
+            .url = "git+https://github.com/muhammad-fiaz/httpx.zig?ref=0.2.3#1669823515a73d3870a8f60ebbbd172dfd5f3557",
+            .hash = "httpx-0.2.3-8qj2er5xJgEgo0DPdwjWbHFvRD4-Gl4OrqIiTDTv6mGQ",
             // Lazy: only fetched when `-Dotlp-httpx` resolves it via
             // b.lazyDependency(...); a default build fetches nothing.
             .lazy = true,

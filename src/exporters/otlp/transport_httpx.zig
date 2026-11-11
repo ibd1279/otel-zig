@@ -127,25 +127,29 @@ fn httpxAttempt(
 
     var loaded_tls = try loadTlsOptions(allocator, config.io, config.tls_config);
     defer loaded_tls.deinit(allocator);
-    const tls_options = loaded_tls.options;
 
-    // std.http.Header and httpx.Header are both `{ name: []const u8,
+    // std.http.Header and httpx.client.header are both `{ name: []const u8,
     // value: []const u8 }` with identical layout, so the caller's header
     // slice is passed through without a copy. The comptime assertions
     // keep a future httpx bump from silently breaking the equivalence.
     comptime {
-        std.debug.assert(@sizeOf(std.http.Header) == @sizeOf(httpx.Header));
-        std.debug.assert(@offsetOf(std.http.Header, "name") == @offsetOf(httpx.Header, "name"));
-        std.debug.assert(@offsetOf(std.http.Header, "value") == @offsetOf(httpx.Header, "value"));
+        std.debug.assert(@sizeOf(std.http.Header) == @sizeOf(httpx.client.header));
+        std.debug.assert(@offsetOf(std.http.Header, "name") == @offsetOf(httpx.client.header, "name"));
+        std.debug.assert(@offsetOf(std.http.Header, "value") == @offsetOf(httpx.client.header, "value"));
     }
-    const httpx_headers: []const httpx.Header = @ptrCast(all_headers);
+    const httpx_headers: []const httpx.client.header = @ptrCast(all_headers);
 
     var response = try client.fetch(url, .{
         .method = .POST,
         .headers = httpx_headers,
         .body = payload,
         .contentType = content_type,
-        .tls = tls_options,
+        // httpx 0.2.3 keeps TlsOptions off the public API, so the literal is
+        // built here where the destination type is known.
+        .tls = .{
+            .verify = if (loaded_tls.skip_verify) httpx.tls.VerifyMode.none else httpx.tls.VerifyMode.caBundle,
+            .caPem = loaded_tls.pem,
+        },
         .followRedirects = false,
         .maxRedirects = 0,
         .http11 = true,
@@ -196,9 +200,16 @@ fn readPemFile(allocator: std.mem.Allocator, io: std.Io, path: []const u8) ![]u8
 /// so the buffer is owned here and must outlive the `client.fetch()` that
 /// consumes the options — `deinit` is the only place it is freed. The gRPC
 /// backend reuses this pattern (REQ-8) through these `pub` declarations.
+/// httpx 0.2.3 no longer exports `TlsOptions` from the package root; it lives
+/// on the request-options struct (`Options.tls`), so derive the type from the
+/// field rather than naming a path that does not exist any more.
+const RequestTlsOptions = httpx.RequestOptions.TlsOptions;
+
 pub const LoadedTls = struct {
-    options: ?httpx.TlsOptions = null,
+    /// PEM bundle backing `.caPem`; borrowed by the fetch that consumes it.
     pem: ?[]u8 = null,
+    /// `tls.insecure_skip_verify`: disable chain verification for this attempt.
+    skip_verify: bool = false,
 
     pub fn deinit(self: *LoadedTls, allocator: std.mem.Allocator) void {
         if (self.pem) |buffer| allocator.free(buffer);
@@ -217,13 +228,13 @@ pub fn loadTlsOptions(
     tls: ?TlsConfig,
 ) !LoadedTls {
     const config = tls orelse return .{};
-    if (config.insecure_skip_verify) return .{ .options = .{ .verify = .none } };
+    if (config.insecure_skip_verify) return .{ .skip_verify = true };
     const ca_file = config.ca_file orelse return .{};
     // Custom CA bundle: load the PEM file for the duration of the request
     // (matches the default backend's ca_file handling).
     const pem = try readPemFile(allocator, io, ca_file);
     errdefer allocator.free(pem);
-    return .{ .options = .{ .verify = .caBundle, .caPem = pem }, .pem = pem };
+    return .{ .pem = pem };
 }
 
 test "httpx backend rejects mutual TLS before any network call" {

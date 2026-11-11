@@ -97,6 +97,10 @@ fn joinWithPort(allocator: std.mem.Allocator, endpoint: []const u8, path: []cons
 /// returned unchanged (either way the result is owned by `allocator`).
 fn defaultOtlpAuthority(allocator: std.mem.Allocator, endpoint: []const u8, default_port: u16) ![]u8 {
     const scheme_end = std.mem.indexOf(u8, endpoint, "://") orelse return allocator.dupe(u8, endpoint);
+    // A URL that names its scheme and omits the port means the scheme's own
+    // port: https://otlp.datadoghq.com is :443, never :4318. The OTLP default
+    // port only applies to a port-less plain-http collector URL.
+    const port: u16 = if (std.ascii.eqlIgnoreCase(endpoint[0..scheme_end], "https")) 443 else default_port;
     var authority_start = scheme_end + 3;
     // Skip userinfo: the port separator we look for comes after any '@'.
     if (std.mem.lastIndexOfScalar(u8, endpoint[authority_start..], '@')) |at| {
@@ -115,7 +119,7 @@ fn defaultOtlpAuthority(allocator: std.mem.Allocator, endpoint: []const u8, defa
     if (has_port) return allocator.dupe(u8, endpoint);
     return std.fmt.allocPrint(allocator, "{s}:{d}{s}", .{
         endpoint[0..authority_end],
-        default_port,
+        port,
         endpoint[authority_end..],
     });
 }

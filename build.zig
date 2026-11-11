@@ -84,7 +84,7 @@ pub fn build(b: *std.Build) void {
     const use_httpx_transport = b.option(
         bool,
         "otlp-httpx",
-        "Use httpx.zig (0.2.2) as the OTLP/HTTP transport backend instead of std.http",
+        "Use httpx.zig (0.2.3) as the OTLP/HTTP transport backend instead of std.http",
     ) orelse false;
     const transport_build_options = b.addOptions();
     transport_build_options.addOption(bool, "otlp_httpx", use_httpx_transport);
