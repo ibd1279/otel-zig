@@ -63,9 +63,8 @@ pub fn post(
 
 /// One httpx.zig POST attempt. Issues exactly one HTTP request. The per-
 /// attempt deadline is enforced by the shared `attemptWithTimeout` wrapper
-/// on `config.io` — httpx's own `timeoutMs` is deliberately NOT set, because
-/// its `SO_RCVTIMEO`-based timeout surfaces as EAGAIN inside std.Io's
-/// Threaded backend (a programmer-bug panic there) instead of a clean error.
+/// on `config.io`, and the same deadline is handed to httpx as `timeoutMs`
+/// (see `httpxAttempt` for why that is not optional).
 fn performHttpx(
     client_allocator: std.mem.Allocator,
     allocator: std.mem.Allocator,
@@ -82,7 +81,7 @@ fn performHttpx(
     _ = uri;
 
     return base.attemptWithTimeout(config, timeout_ms, httpxAttempt, .{
-        client_allocator, allocator, config, url, content_type, extra_headers, payload,
+        client_allocator, allocator, config, url, content_type, extra_headers, payload, timeout_ms,
     });
 }
 
@@ -94,6 +93,7 @@ fn httpxAttempt(
     content_type: []const u8,
     extra_headers: []const std.http.Header,
     payload: []const u8,
+    timeout_ms: u64,
 ) anyerror!Response {
     // The default backend overrides the User-Agent to `otel-zig-otlp`
     // (transport.zig), and httpx injects its own default UA only when the
@@ -103,16 +103,26 @@ fn httpxAttempt(
     const all_headers = try std.mem.concat(allocator, std.http.Header, &.{ &ua_header, extra_headers });
     defer allocator.free(all_headers);
 
-    // httpx.zig assumes a blocking (single-threaded) std.Io: it issues
-    // socket reads directly instead of through the async readiness model
-    // that a concurrent `std.Io.Threaded` requires. Run the client on the
-    // dedicated single-threaded instance (the mode httpx's own examples
-    // use); the attempt deadline comes from `attemptWithTimeout`, and
-    // backoff sleeps keep using the caller's `config.io`.
+    // httpx issues socket reads directly instead of through a readiness
+    // loop of its own, so it runs on the dedicated single-threaded io (the
+    // mode its examples use). Measured: the io choice makes no difference to
+    // the outcome -- `global_single_threaded` and the caller's multi-threaded
+    // `config.io` both complete requests once `timeoutMs` is set, and both
+    // hang without it.
     const httpx_io = std.Io.Threaded.global_single_threaded.io();
     var client = httpx.Client.init(client_allocator, httpx_io, .{
         // REQ-3: upstream retry, connection-pool retry, and interceptors
         // hard-disabled — single request per attempt.
+        // Required, not cosmetic: httpx maps this to the socket's
+        // read-inactivity timeout, and with it unset it leaves the value at 0
+        // and every read becomes an unbounded blocking recvmsg. On a
+        // keep-alive connection that never returns -- the response is already
+        // complete, but the read waits for a close that never comes, so the
+        // attempt dies on our deadline with no response telemetry
+        // (ExportRetryExhausted, zero responses). With it set, httpx reads
+        // through io.operateTimeout/poll, the response completes, and the
+        // status line and body surface normally.
+        .timeoutMs = timeout_ms,
         .maxRetries = 0,
         .retryDelayMs = 0,
         .retryStatusCodes = &.{},
