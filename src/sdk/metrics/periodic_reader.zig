@@ -338,9 +338,29 @@ pub const PeriodicReader = struct {
             // Acquire mutex to match collect() and forceFlush() — prevents
             // registerMeter/unregisterMeter from mutating registered_meters
             // while internalCollect iterates it.
-            self.mutex.lockUncancelable(self.io);
-            self.internalCollect();
-            self.mutex.unlock(self.io);
+            //
+            // The work runs as an io pool task, NOT inline on this thread:
+            // std.Io.Threaded (0.17.x, FreeBSD verified) cannot service
+            // nested io operations (DNS/connect queues, http clients) from
+            // a thread it did not spawn — HTTPS exports hang forever. The
+            // raw thread only owns the timing loop; collection and export
+            // execute on pool workers.
+            const CollectWork = struct {
+                fn run(proc: *PeriodicReader) void {
+                    proc.mutex.lockUncancelable(proc.io);
+                    proc.internalCollect();
+                    proc.mutex.unlock(proc.io);
+                }
+            };
+            if (self.io.concurrent(CollectWork.run, .{self})) |fut| {
+                var future = fut;
+                _ = future.await(self.io);
+            } else |_| {
+                // ConcurrencyUnavailable: pool exhausted — degrade to inline.
+                self.mutex.lockUncancelable(self.io);
+                self.internalCollect();
+                self.mutex.unlock(self.io);
+            }
         }
     }
 };

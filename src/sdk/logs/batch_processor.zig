@@ -323,9 +323,28 @@ pub const BatchLogRecordProcessor = struct {
             }
 
             // Do the export
-            self.mutex.lockUncancelable(self.io);
-            _ = self.exportBatchLocked();
-            self.mutex.unlock(self.io);
+            //
+            // The export runs as an io pool task, NOT inline on this thread:
+            // std.Io.Threaded (0.17.x, FreeBSD verified) cannot service
+            // nested io operations (DNS/connect queues, http clients) from
+            // a thread it did not spawn — HTTPS exports hang forever. The
+            // raw thread only owns the timing loop.
+            const ExportWork = struct {
+                fn run(proc: *BatchLogRecordProcessor) void {
+                    proc.mutex.lockUncancelable(proc.io);
+                    _ = proc.exportBatchLocked();
+                    proc.mutex.unlock(proc.io);
+                }
+            };
+            if (self.io.concurrent(ExportWork.run, .{self})) |fut| {
+                var future = fut;
+                _ = future.await(self.io);
+            } else |_| {
+                // ConcurrencyUnavailable: pool exhausted — degrade to inline.
+                self.mutex.lockUncancelable(self.io);
+                _ = self.exportBatchLocked();
+                self.mutex.unlock(self.io);
+            }
         }
     }
 

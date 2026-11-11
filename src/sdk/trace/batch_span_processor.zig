@@ -393,7 +393,24 @@ pub const BatchSpanProcessor = struct {
 
             // Do the export — exportBatch drains the queue under the lock and
             // releases the mutex during HTTP export (same pattern as forceFlush).
-            self.exportBatch();
+            //
+            // The export runs as an io pool task, NOT inline on this thread:
+            // std.Io.Threaded (0.17.x, FreeBSD verified) cannot service
+            // nested io operations (DNS/connect queues, http clients) from
+            // a thread it did not spawn — HTTPS exports hang forever. The
+            // raw thread only owns the timing loop.
+            const ExportWork = struct {
+                fn run(proc: *BatchSpanProcessor) void {
+                    proc.exportBatch();
+                }
+            };
+            if (self.io.concurrent(ExportWork.run, .{self})) |fut| {
+                var future = fut;
+                _ = future.await(self.io);
+            } else |_| {
+                // ConcurrencyUnavailable: pool exhausted — degrade to inline.
+                self.exportBatch();
+            }
         }
     }
 
