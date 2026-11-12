@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
     // Set up trace provider using the new setupGlobalProvider pattern
-    var stderr_buffer = [_]u8{0} ** 1024;
+    var stderr_buffer: [1024]u8 = @splat(0);
     var stderr = otel_exporters.console.initStream(io, true, &stderr_buffer);
     const concrete_provider = try otel_sdk.trace.setupGlobalProvider(
         init,

@@ -17,7 +17,7 @@ pub fn main(init: std.process.Init) !void {
     defer otel_api.provider_registry.unsetAllProviders();
 
     // Setup global provider with pipeline configuration in one call
-    var stderr_buffer = [_]u8{0} ** 1024;
+    var stderr_buffer: [1024]u8 = @splat(0);
     var stderr = std.Io.File.stderr().writer(io, &stderr_buffer);
     const provider = try otel_sdk.logs.setupGlobalProvider(init, .{otel_sdk.logs.SimpleLogRecordProcessor.PipelineStep.init({})
         .flowTo(otel_exporters.stream.LogRecordSink.PipelineStep.init(.{ .writer = &stderr.interface }))}, null);

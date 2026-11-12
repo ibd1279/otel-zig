@@ -29,13 +29,13 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
     print("🧪 OpenTelemetry Validation Test Example\n", .{});
-    print("=" ** 50 ++ "\n\n", .{});
+    print("==================================================" ++ "\n\n", .{});
 
     // Set up custom error handler to capture validation errors
     otel_api.common.setGlobalErrorHandler(validationErrorHandler);
 
     // Set up logging provider
-    var stderr_buffer = [_]u8{0} ** 1024;
+    var stderr_buffer: [1024]u8 = @splat(0);
     var stderr = std.Io.File.stderr().writer(io, &stderr_buffer);
     const log_provider = try otel_sdk.logs.setupGlobalProvider(
         init,
@@ -68,7 +68,7 @@ pub fn main(init: std.process.Init) !void {
     // Test Meter API validation
     try testMeterValidation();
 
-    print("\n" ++ "=" ** 50 ++ "\n", .{});
+    print("\n" ++ "==================================================" ++ "\n", .{});
     print("🎯 Validation Test Complete!\n", .{});
     print("📊 Total validation errors caught: {d}\n", .{error_count});
 
@@ -87,7 +87,7 @@ pub fn main(init: std.process.Init) !void {
 
 fn testLoggerValidation() !void {
     print("🔍 Testing Logger API Validation\n", .{});
-    print("-" ** 30 ++ "\n", .{});
+    print("------------------------------" ++ "\n", .{});
 
     const scope = otel_api.InstrumentationScope{ .name = "validation.logger.test", .version = "1.0.0" };
     var logger = otel_api.getGlobalLoggerProvider().getLoggerWithScope(scope);
@@ -147,7 +147,7 @@ fn testLoggerValidation() !void {
 
 fn testMeterValidation() !void {
     print("🔍 Testing Meter API Validation\n", .{});
-    print("-" ** 30 ++ "\n", .{});
+    print("------------------------------" ++ "\n", .{});
 
     const scope = otel_api.InstrumentationScope{ .name = "validation.meter.test", .version = "1.0.0" };
     var meter = otel_api.getGlobalMeterProvider().getMeterWithScope(scope);

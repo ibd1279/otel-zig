@@ -26,12 +26,12 @@ pub fn main(init: std.process.Init) !void {
     const io = init.io;
 
     print("🚀 Starting Comprehensive Trace SDK Example\n", .{});
-    print("=" ** 50 ++ "\n", .{});
+    print("==================================================" ++ "\n", .{});
 
     // Set up trace provider using the new setupGlobalProvider pattern
     // Note: setupGlobalProvider uses automatic resource detection
     // The custom resource above demonstrates resource building but won't be used
-    var stderr_buffer = [_]u8{0} ** 1024;
+    var stderr_buffer: [1024]u8 = @splat(0);
     var stderr = std.Io.File.stderr().writer(io, &stderr_buffer);
     const concrete_provider = try otel_sdk.trace.setupGlobalProvider(
         init,
@@ -85,7 +85,7 @@ fn getTracer(setup: *TraceSetup, component: ServiceComponent) otel_api.trace.Tra
 
 fn runHttpRequestScenario(io: std.Io, setup: *TraceSetup) !void {
     print("\n📡 HTTP Request Scenario\n", .{});
-    print("-" ** 30 ++ "\n", .{});
+    print("------------------------------" ++ "\n", .{});
 
     const ctx = &[_]otel_api.ContextKeyValue{};
 
@@ -188,7 +188,7 @@ fn runHttpRequestScenario(io: std.Io, setup: *TraceSetup) !void {
 
 fn runErrorHandlingScenario(setup: *TraceSetup) !void {
     print("\n❌ Error Handling Scenario\n", .{});
-    print("-" ** 30 ++ "\n", .{});
+    print("------------------------------" ++ "\n", .{});
 
     const ctx = &[_]otel_api.ContextKeyValue{};
 
@@ -250,7 +250,7 @@ fn runErrorHandlingScenario(setup: *TraceSetup) !void {
 
 fn runMessageQueueScenario(io: std.Io, setup: *TraceSetup) !void {
     print("\n📨 Message Queue Scenario\n", .{});
-    print("-" ** 30 ++ "\n", .{});
+    print("------------------------------" ++ "\n", .{});
 
     const ctx = &[_]otel_api.ContextKeyValue{};
 
@@ -327,7 +327,7 @@ fn runMessageQueueScenario(io: std.Io, setup: *TraceSetup) !void {
 
 fn runConcurrentOperationsScenario(io: std.Io, allocator: std.mem.Allocator, setup: *TraceSetup) !void {
     print("\n🔄 Concurrent Operations Scenario\n", .{});
-    print("-" ** 30 ++ "\n", .{});
+    print("------------------------------" ++ "\n", .{});
 
     const ctx = &[_]otel_api.ContextKeyValue{};
 
@@ -383,7 +383,7 @@ fn runConcurrentOperationsScenario(io: std.Io, allocator: std.mem.Allocator, set
 
 fn runPerformanceTestScenario(io: std.Io, setup: *TraceSetup) !void {
     print("\n⚡ Performance Test Scenario\n", .{});
-    print("-" ** 30 ++ "\n", .{});
+    print("------------------------------" ++ "\n", .{});
 
     const ctx = &[_]otel_api.ContextKeyValue{};
 
