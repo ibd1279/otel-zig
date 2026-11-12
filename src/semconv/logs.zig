@@ -3,7 +3,7 @@
 //! Attributes defined in the log namespace.  Cross-cutting attributes
 //! (exception.*, code.*, thread.*, http.*, k8s.*, cloud.*, service.*) live
 //! in their own modules and are not duplicated here.
-//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.41.0/model/log
+//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.45.0/model/log
 
 // Log file attributes
 

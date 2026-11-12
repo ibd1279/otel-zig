@@ -1,7 +1,7 @@
 //! OpenTelemetry MCP (Model Context Protocol) Semantic Conventions
 //!
 //! Attribute names and known values for MCP instrumentation.
-//! Spec: https://github.com/open-telemetry/semantic-conventions-genai (pegged to semconv v1.41.0)
+//! Spec: https://github.com/open-telemetry/semantic-conventions-genai (pinned at commit e6658f1)
 
 // Method
 

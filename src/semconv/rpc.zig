@@ -1,7 +1,7 @@
 //! OpenTelemetry RPC Semantic Conventions
 //!
 //! Attributes for Remote Procedure Call (RPC) instrumentation.
-//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.41.0/model/rpc
+//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.45.0/model/rpc
 
 // System
 

@@ -1,7 +1,7 @@
 //! OpenTelemetry Messaging Semantic Conventions
 //!
 //! Attributes for messaging / queue / pub-sub instrumentation.
-//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.41.0/model/messaging
+//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.45.0/model/messaging
 
 // General attributes
 

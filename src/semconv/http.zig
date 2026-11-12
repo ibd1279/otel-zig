@@ -1,7 +1,7 @@
 //! OpenTelemetry HTTP Semantic Conventions
 //!
 //! Stable and development attributes for HTTP spans and metrics.
-//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.41.0/model/http
+//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.45.0/model/http
 
 // Request attributes
 

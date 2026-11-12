@@ -1,7 +1,7 @@
 //! OpenTelemetry Network Semantic Conventions
 //!
 //! Attributes for network layer and transport instrumentation.
-//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.41.0/model/network
+//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.45.0/model/network
 
 // Transport layer
 

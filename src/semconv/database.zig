@@ -1,7 +1,7 @@
 //! OpenTelemetry Database Semantic Conventions
 //!
 //! Attributes for database client instrumentation.
-//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.41.0/model/db
+//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.45.0/model/db
 
 // Collection / namespace
 

@@ -2,7 +2,7 @@
 //!
 //! Standard metric names for HTTP, database, and RPC instrumentation,
 //! plus the Units helper for instrument configuration.
-//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.41.0/model
+//! Spec: https://github.com/open-telemetry/semantic-conventions/tree/v1.45.0/model
 
 // HTTP server metrics
 
