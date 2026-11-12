@@ -1,4 +1,4 @@
-//! OpenTelemetry Semantic Conventions v1.41.0
+//! OpenTelemetry Semantic Conventions v1.45.0
 //!
 //! Re-exports all signal-specific convention modules.  Each module
 //! exposes SCREAMING_SNAKE_CASE string constants for attribute keys and
@@ -46,8 +46,8 @@ pub const mcp = @import("mcp.zig");
 
 // Version information
 
-pub const SEMCONV_VERSION = "1.41.0";
-pub const SCHEMA_URL = "https://opentelemetry.io/schemas/1.41.0";
+pub const SEMCONV_VERSION = "1.45.0";
+pub const SCHEMA_URL = "https://opentelemetry.io/schemas/1.45.0";
 
 test "semconv module compilation" {
     _ = std.testing;
