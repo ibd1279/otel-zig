@@ -41,10 +41,15 @@ pub const AttributeValue = union(enum) {
     /// Array of UTF-8 string slices (non-owning)
     string_array: []const []const u8,
 
+    /// Empty value: the spec's "empty value" AnyValue kind
+    /// (specification/common/README.md, "AnyValue"). Encoded as an AnyValue
+    /// with no value set. Meaningful, and distinct from `""`, `0` and `false`.
+    none: void,
+
     /// Deep copy an AttributeValue. Must call `deinitOwned` on the return instance.
     pub fn initOwned(self: AttributeValue, allocator: std.mem.Allocator) !AttributeValue {
         return switch (self) {
-            .bool, .int, .float => self,
+            .bool, .int, .float, .none => self,
             .string => |s| .{ .string = try allocator.dupe(u8, s) },
             .bool_array => |s| .{ .bool_array = try allocator.dupe(bool, s) },
             .int_array => |s| .{ .int_array = try allocator.dupe(i64, s) },
@@ -65,7 +70,7 @@ pub const AttributeValue = union(enum) {
     /// Destroy a deep copied AttributeValue.
     pub fn deinitOwned(self: AttributeValue, allocator: std.mem.Allocator) void {
         switch (self) {
-            .bool, .int, .float => {},
+            .bool, .int, .float, .none => {},
             .string => |s| allocator.free(s),
             .bool_array => |s| allocator.free(s),
             .int_array => |s| allocator.free(s),
@@ -84,6 +89,7 @@ pub const AttributeValue = union(enum) {
         }
 
         return switch (self) {
+            .none => true,
             .bool => |a| a == other.bool,
             .int => |a| a == other.int,
             .float => |a| a == other.float,
@@ -109,6 +115,7 @@ pub const AttributeValue = union(enum) {
         hasher.update(std.mem.asBytes(&tag));
 
         switch (self) {
+            .none => {},
             .bool => |v| hasher.update(std.mem.asBytes(&v)),
             .int => |v| hasher.update(std.mem.asBytes(&v)),
             .float => |v| hasher.update(std.mem.asBytes(&v)),
@@ -132,6 +139,7 @@ pub const AttributeValue = union(enum) {
         writer: anytype,
     ) !void {
         switch (self) {
+            .none => try writer.writeAll("empty"),
             .bool => |v| try writer.print("{any}", .{v}),
             .int => |v| try writer.print("{d}", .{v}),
             .float => |v| try writer.print("{d}", .{v}),
@@ -171,6 +179,42 @@ pub const AttributeValue = union(enum) {
         }
     }
 };
+test "AttributeValue none (empty value) is its own value" {
+    const testing = std.testing;
+
+    const getHash = struct {
+        fn call(value: AttributeValue) u64 {
+            var hasher = std.hash.Wyhash.init(0);
+            value.hash(&hasher);
+            return hasher.final();
+        }
+    }.call;
+
+    const empty: AttributeValue = .{ .none = {} };
+    try testing.expectEqualStrings("none", @tagName(empty));
+
+    // Empty is a meaningful value: equal to itself, never conflated with the
+    // zero-values of the other variants.
+    try testing.expect(empty.eql(AttributeValue{ .none = {} }));
+    try testing.expectEqual(getHash(empty), getHash(AttributeValue{ .none = {} }));
+    try testing.expect(!empty.eql(AttributeValue{ .string = "" }));
+    try testing.expect(!empty.eql(AttributeValue{ .int = 0 }));
+    try testing.expect(!empty.eql(AttributeValue{ .bool = false }));
+    try testing.expect(!empty.eql(AttributeValue{ .string_array = &[_][]const u8{} }));
+    try testing.expect(!empty.eql(AttributeValue{ .int_array = &[_]i64{} }));
+    try testing.expect(!(AttributeValue{ .string = "" }).eql(empty));
+
+    // Non-owning: the owned round-trip must not allocate or lose the value.
+    const owned = try empty.initOwned(testing.allocator);
+    defer owned.deinitOwned(testing.allocator);
+    try testing.expect(owned.eql(empty));
+
+    // Formatting must not look like an empty string.
+    const rendered = try std.fmt.allocPrint(testing.allocator, "{f}", .{empty});
+    defer testing.allocator.free(rendered);
+    try testing.expectEqualStrings("empty", rendered);
+}
+
 
 // -----------------------------------------
 // Tests

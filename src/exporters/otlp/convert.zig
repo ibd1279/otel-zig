@@ -25,6 +25,8 @@ pub inline fn attributeKeyValueToProto(allocator: std.mem.Allocator, kv: api.com
 /// Convert an API AttributeValue to a Proto AnyValue.
 pub fn attributeValueToProto(allocator: std.mem.Allocator, value: api.common.AttributeValue) !common_v1.AnyValue {
     return switch (value) {
+        // Empty value: an AnyValue with no oneof set.
+        .none => common_v1.AnyValue{},
         .string => |s| common_v1.AnyValue{ .value = .{ .string_value = try allocator.dupe(u8, s) } },
         .int => |i| common_v1.AnyValue{ .value = .{ .int_value = i } },
         .float => |f| common_v1.AnyValue{ .value = .{ .double_value = f } },
@@ -131,5 +133,13 @@ test "Protobuf attribute conversion" {
         try testing.expect(pb_value.value != null);
         try testing.expectEqual(common_v1.AnyValue._value_case.array_value, std.meta.activeTag(pb_value.value.?));
         try testing.expectEqual(@as(usize, 3), pb_value.value.?.array_value.values.items.len);
+    }
+
+    // Test empty value: encodes as an AnyValue with no oneof set
+    {
+        const attr_value = api.common.AttributeValue{ .none = {} };
+        var pb_value = try attributeValueToProto(allocator, attr_value);
+        defer pb_value.deinit(allocator);
+        try testing.expect(pb_value.value == null);
     }
 }
