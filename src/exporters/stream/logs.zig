@@ -131,3 +131,31 @@ fn outputLogRecord(resource: sdk.resource.Resource, cfg: exporters.stream.SinkCo
     try cfg.writer.print("\n", .{});
     if (cfg.flush_after_each) try cfg.writer.flush();
 }
+
+test "outputLogRecord renders an empty value distinctly from a missing body" {
+    const testing = std.testing;
+
+    var empty_buf: [128]u8 = undefined;
+    var empty_writer = std.Io.Writer.fixed(&empty_buf);
+    try outputLogRecord(
+        sdk.resource.Resource.empty,
+        .{ .writer = &empty_writer, .include_timestamp = false },
+        .{ .body = .{ .none = {} } },
+    );
+
+    var null_buf: [128]u8 = undefined;
+    var null_writer = std.Io.Writer.fixed(&null_buf);
+    try outputLogRecord(
+        sdk.resource.Resource.empty,
+        .{ .writer = &null_writer, .include_timestamp = false },
+        .{},
+    );
+
+    const empty_out = empty_writer.buffered();
+    const null_out = null_writer.buffered();
+
+    try testing.expect(std.mem.indexOf(u8, empty_out, "empty") != null);
+    try testing.expect(std.mem.indexOf(u8, null_out, "(no message)") != null);
+    try testing.expect(!std.mem.eql(u8, empty_out, null_out));
+}
+
