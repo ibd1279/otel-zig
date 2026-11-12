@@ -19,16 +19,14 @@ pub const SystemName = struct {
 pub const METHOD = "rpc.method";
 pub const METHOD_ORIGINAL = "rpc.method_original";
 
-// Response
+// Status
 
-pub const RESPONSE_STATUS_CODE = "rpc.response.status_code";
+pub const STATUS_CODE = "rpc.status_code";
 
-// Metadata (template bases)
+// Headers (template base)
 
 /// Template base — append `.<lowercase-key>` to form the full key.
-pub const REQUEST_METADATA = "rpc.request.metadata";
-/// Template base — append `.<lowercase-key>` to form the full key.
-pub const RESPONSE_METADATA = "rpc.response.metadata";
+pub const REQUEST_HEADER = "rpc.request.header";
 
 // Metrics
 

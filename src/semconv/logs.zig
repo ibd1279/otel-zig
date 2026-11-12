@@ -24,7 +24,3 @@ pub const Iostream = struct {
 // Log record
 
 pub const LOG_RECORD_UID = "log.record.uid";
-
-// Event
-
-pub const EVENT_NAME = "event.name";

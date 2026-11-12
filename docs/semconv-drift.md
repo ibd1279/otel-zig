@@ -61,7 +61,14 @@ different things, which should not be treated the same way:
 3. **Obsoleted — 2 keys:** `exception.escaped` (core: `reason: obsoleted` —
    "no longer recommended to record exceptions that are handled and do not
    escape the scope of a span") and `event.name`, both already deprecated at
-   v1.41.0 and still shipped.
+   v1.41.0.
+
+Status: all 25 renames applied and both obsoleted keys removed. The
+`messaging.system` -> `messaging.system.name` move also re-spells five enum
+values (`aws_sqs` -> `aws.sqs`, `eventgrid` -> `azure.eventgrid`,
+`eventhubs` -> `azure.eventhubs`, `gcp_pubsub` -> `gcp.pubsub`,
+`servicebus` -> `azure.servicebus`); that backward-incompatible value change
+was taken deliberately, the project has no user base to protect.
 
 ## Coverage gaps (never implemented, not drift)
 
