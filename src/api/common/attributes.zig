@@ -563,6 +563,14 @@ test "AttributeValue different types have different hashes" {
     try testing.expect(int_hash != float_hash);
     try testing.expect(int_hash != str_hash);
     try testing.expect(float_hash != str_hash);
+
+    // ... and the empty value is distinct from every zero-value as well
+    const empty_val: AttributeValue = .{ .none = {} };
+    const empty_hash = getHash(empty_val);
+    try testing.expect(empty_hash != bool_hash);
+    try testing.expect(empty_hash != int_hash);
+    try testing.expect(empty_hash != float_hash);
+    try testing.expect(empty_hash != str_hash);
 }
 
 /// A key-value pair used for attributes and other OpenTelemetry contexts.
@@ -718,6 +726,11 @@ test "KeyValue formatting" {
     const kv4 = AttributeKeyValue{ .key = "key\nwith\ttabs", .value = .{ .string = "value" } };
     const str4 = try std.fmt.bufPrint(&buf, "{f}", .{kv4});
     try testing.expectEqualStrings("key\nwith\ttabs=\"value\"", str4);
+
+    // Empty value renders unquoted, so it cannot be mistaken for an empty string
+    const kv5 = AttributeKeyValue{ .key = "empty.attr", .value = .{ .none = {} } };
+    const str5 = try std.fmt.bufPrint(&buf, "{f}", .{kv5});
+    try testing.expectEqualStrings("empty.attr=empty", str5);
 }
 
 test "KeyValue hash/equality contract" {
@@ -747,6 +760,19 @@ test "KeyValue hash/equality contract" {
     // Different key should not be equal and should have different hash
     try testing.expect(!kv1.eql(kv4));
     try testing.expect(getHash(kv1) != getHash(kv4));
+
+    // Empty value: stable across copies, distinct from the zero-values
+    const kv_empty1 = AttributeKeyValue{ .key = "empty.attr", .value = .{ .none = {} } };
+    const kv_empty2 = AttributeKeyValue{ .key = "empty.attr", .value = .{ .none = {} } };
+    const kv_zero = AttributeKeyValue{ .key = "empty.attr", .value = .{ .int = 0 } };
+    const kv_empty_str = AttributeKeyValue{ .key = "empty.attr", .value = .{ .string = "" } };
+
+    try testing.expect(kv_empty1.eql(kv_empty2));
+    try testing.expectEqual(getHash(kv_empty1), getHash(kv_empty2));
+    try testing.expect(!kv_empty1.eql(kv_zero));
+    try testing.expect(getHash(kv_empty1) != getHash(kv_zero));
+    try testing.expect(!kv_empty1.eql(kv_empty_str));
+    try testing.expect(getHash(kv_empty1) != getHash(kv_empty_str));
 }
 
 test "KeyValue Hash consistency" {
@@ -1126,6 +1152,32 @@ test "AttributeBuilder empty and edge cases" {
     try testing.expectEqual(@as(usize, 1), single_attr.len);
     try testing.expectEqualStrings("single.key", single_attr[0].key);
     try testing.expectEqualStrings("single.value", single_attr[0].value.string);
+
+    // Empty value survives the builder's dedupe and deep copy
+    const none_attrs = try AttributeBuilder.init(allocator)
+        .add(.{ .key = "empty.attr", .value = .{ .none = {} } })
+        .finish(allocator);
+    defer AttributeKeyValue.deinitOwnedSlice(allocator, none_attrs);
+    try testing.expectEqual(@as(usize, 1), none_attrs.len);
+    try testing.expectEqualStrings("empty.attr", none_attrs[0].key);
+    try testing.expect(none_attrs[0].value.eql(AttributeValue{ .none = {} }));
+
+    // Empty participates in last-wins dedupe in both directions
+    const to_empty = try AttributeBuilder.init(allocator)
+        .add(.{ .key = "k", .value = .{ .string = "first" } })
+        .add(.{ .key = "k", .value = .{ .none = {} } })
+        .finish(allocator);
+    defer AttributeKeyValue.deinitOwnedSlice(allocator, to_empty);
+    try testing.expectEqual(@as(usize, 1), to_empty.len);
+    try testing.expect(to_empty[0].value.eql(AttributeValue{ .none = {} }));
+
+    const from_empty = try AttributeBuilder.init(allocator)
+        .add(.{ .key = "k", .value = .{ .none = {} } })
+        .add(.{ .key = "k", .value = .{ .int = 7 } })
+        .finish(allocator);
+    defer AttributeKeyValue.deinitOwnedSlice(allocator, from_empty);
+    try testing.expectEqual(@as(usize, 1), from_empty.len);
+    try testing.expectEqual(@as(i64, 7), from_empty[0].value.int);
 }
 
 test "AttributeBuilder duplicate key handling - last wins" {

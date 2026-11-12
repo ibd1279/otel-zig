@@ -185,4 +185,21 @@ test "LogRecord initOwned and deinitOwned" {
     try testing.expect(original.severity_text.?.ptr != owned.severity_text.?.ptr);
     try testing.expect(original.event_name.?.ptr != owned.event_name.?.ptr);
     try testing.expect(original.body.?.string.ptr != owned.body.?.string.ptr);
+
+    // An empty body is a present value: distinguishable from a missing body and
+    // preserved by the deep copy.
+    const empty_record = LogRecord{
+        .body = .{ .none = {} },
+        .attributes = attributes,
+    };
+    const owned_empty = try LogRecord.initOwned(allocator, empty_record);
+    defer owned_empty.deinitOwned(allocator);
+    try testing.expect(owned_empty.body != null);
+    try testing.expect(owned_empty.body.?.eql(api.common.AttributeValue{ .none = {} }));
+    try testing.expect(!owned_empty.body.?.eql(api.common.AttributeValue{ .string = "" }));
+
+    const no_body_record = LogRecord{ .attributes = attributes };
+    const owned_no_body = try LogRecord.initOwned(allocator, no_body_record);
+    defer owned_no_body.deinitOwned(allocator);
+    try testing.expect(owned_no_body.body == null);
 }

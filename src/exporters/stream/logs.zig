@@ -53,6 +53,7 @@ pub fn exportRecords(self: *LogRecordSink, records: []const sdk.logs.LogRecord, 
     for (records) |rec| {
         outputLogRecord(resource, self.config, rec) catch |err| {
             const message_body = if (rec.body) |body| switch (body) {
+                .none => "(empty message)",
                 .string => |str| str,
                 else => "(non-string message)",
             } else "(no message)";

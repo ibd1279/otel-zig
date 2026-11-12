@@ -192,6 +192,7 @@ pub const BatchLogRecordProcessor = struct {
         // Clone log record for queuing
         var owned_record = sdk.LogRecord.initOwned(self.allocator, record) catch |err| {
             const message_body = if (record.body) |body| switch (body) {
+                .none => "(empty body)",
                 .string => |s| s,
                 else => "(complex body)",
             } else "(no body)";
@@ -212,6 +213,7 @@ pub const BatchLogRecordProcessor = struct {
             owned_record.deinitOwned(self.allocator);
 
             const message_body = if (record.body) |body| switch (body) {
+                .none => "(empty body)",
                 .string => |s| s,
                 else => "(complex body)",
             } else "(no body)";
