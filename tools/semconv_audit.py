@@ -14,6 +14,19 @@ ATTR_TYPES = {"string", "int", "double", "boolean", "string[]", "int[]",
 GROUP_TYPES = {"attribute_group", "span", "metric", "event", "entity",
                "metric_group", "scope", "resource", "metric_ref"}
 
+# Per-file namespace scoping. By default a file is compared against every model
+# attribute sharing a top-level namespace with the keys it defines, which is
+# right for single-namespace files (db, http, rpc, ...). It is wrong for a file
+# that adopted a shared vendor namespace: messaging.zig now ships kafka.*,
+# gcp.pubsub.*, azure.eventhubs.*/azure.servicebus.*, rabbitmq.* and rocketmq.*,
+# and a bare "azure." scope would report every azure.cosmosdb.* attribute as a
+# gap in a messaging file.
+DOMAIN_OVERRIDES = {
+    "messaging.zig": ("messaging.", "kafka.", "gcp.pubsub.", "azure.eventhubs.",
+                      "azure.servicebus.", "rabbitmq.", "rocketmq."),
+}
+
+NAME_RE = re.compile(r"^\s*-\s+name:\s*(\S+)\s*$")
 ENTRY_RE = re.compile(r"^(\s*)-\s+(id|ref|key):\s*(\S+)\s*$")
 TYPE_RE = re.compile(r"^(\s+)type:\s*(\S.*?)?\s*$")
 VAL_RE = re.compile(r"^\s+value:\s*(.+?)\s*$")
@@ -23,7 +36,7 @@ RENAMED_RE = re.compile(r"^\s+renamed_to:\s*(\S+)\s*$")
 
 
 def parse_model(root):
-    attrs, enums, formats, metrics = {}, collections.defaultdict(set), collections.Counter(), set()
+    attrs, enums, formats, metrics, named = {}, collections.defaultdict(set), collections.Counter(), set(), set()
     for dirpath, _, files in os.walk(root):
         for fn in sorted(files):
             if not fn.endswith(".yaml"):
@@ -84,6 +97,10 @@ def parse_model(root):
                 return False
 
             for line in lines:
+                # v2 model names metrics and events with "- name:" rather than a
+                # group id; they are legitimate constants, not stale attributes.
+                if NAME_RE.match(line):
+                    named.add(NAME_RE.match(line).group(1))
                 m = ENTRY_RE.match(line)
                 if m:
                     indent = len(m.group(1))
@@ -103,7 +120,7 @@ def parse_model(root):
                 if cur is not None:
                     cur[2].append(line)
             flush()
-    return attrs, enums, formats, metrics
+    return attrs, enums, formats, metrics, named
 
 
 ZIG_CONST_RE = re.compile(r'pub const \w+\s*=\s*"([^"]*)"')
@@ -124,11 +141,12 @@ def parse_zig(path):
 
 def main():
     new_root, old_root, zig_dir = sys.argv[1], sys.argv[2], sys.argv[3]
-    new_attrs, new_enums, new_fmt, new_metrics = parse_model(new_root)
-    old_attrs, old_enums, old_fmt, old_metrics = parse_model(old_root)
+    new_attrs, new_enums, new_fmt, new_metrics, new_named = parse_model(new_root)
+    old_attrs, old_enums, old_fmt, old_metrics, _ = parse_model(old_root)
     files = sorted(f for f in os.listdir(zig_dir) if f.endswith(".zig"))
     ours = {f: parse_zig(os.path.join(zig_dir, f)) for f in files}
-    our_keys = {k for s in ours.values() for k in s if "." in k and k[0].islower()}
+    our_keys = {k for s in ours.values() for k in s
+                if "." in k and k[0].islower() and "://" not in k}
     prefixes = {k.split(".")[0] for k in our_keys}
 
     print("MODEL FORMAT   v1.41: %s   v1.45: %s" % (dict(old_fmt), dict(new_fmt)))
@@ -158,14 +176,21 @@ def main():
     print("\nPER-FILE (deprecated spec attrs excluded from MISSING)")
     totals = collections.Counter()
     for f in files:
-        mine = {k for k in ours[f] if "." in k and k[0].islower()}
+        if f == "metrics.zig":
+            continue    # instrument names, compared against metrics below
+        if f in ("gen_ai.zig", "mcp.zig"):
+            continue    # audited against semantic-conventions-genai, not core
+        mine = {k for k in ours[f] if "." in k and k[0].islower() and "://" not in k}
         if not mine:
             continue
-        prefs = tuple({k.split(".")[0] for k in mine})
-        spec = {a for a in new_attrs if a.startswith(tuple(p + "." for p in prefs))}
+        if f in DOMAIN_OVERRIDES:
+            subs = DOMAIN_OVERRIDES[f]
+        else:
+            subs = tuple(p + "." for p in {k.split(".")[0] for k in mine})
+        spec = {a for a in new_attrs if a.startswith(subs)}
         miss_cur = sorted(a for a in spec - mine if not new_attrs[a]["deprecated"])
         miss_dep = len(spec - mine) - len(miss_cur)
-        stale = sorted(k for k in mine if k not in new_attrs)
+        stale = sorted(k for k in mine if k not in new_attrs and k not in new_metrics and k not in new_named)
         stale_ren = {k.split(".")[0]: 0 for k in []}
         print("%-15s have=%-3d  current-gap=%-3d deprecated-gap=%-3d stale=%-3d" % (f, len(mine), len(miss_cur), miss_dep, len(stale)))
         totals["current_gap"] += len(miss_cur); totals["stale"] += len(stale)
