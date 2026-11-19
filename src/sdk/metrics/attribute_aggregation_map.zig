@@ -28,17 +28,24 @@ pub const AttributeAggregationEntry = struct {
 
 /// Aggregation union type that supports all aggregation variants
 pub const Aggregation = sdk.aggregations.Aggregation;
+const AggregationTag = std.meta.Tag(Aggregation);
 
 /// Attribute-based aggregation map with cardinality limits
 pub const AttributeAggregationMap = struct {
-    // Cardinality limit (matches OpenTelemetry spec default)
-    pub const MAX_CARDINALITY: usize = 2000;
+    /// Default cardinality limit (matches the OpenTelemetry spec default of
+    /// 2000 distinct (instrument, attribute-set) series per collection cycle).
+    pub const DEFAULT_CARDINALITY_LIMIT: usize = 2000;
+
+    /// Retained alias for callers that referenced the old fixed constant.
+    pub const MAX_CARDINALITY: usize = DEFAULT_CARDINALITY_LIMIT;
 
     // Map from (instrument_hash + attribute_hash) to aggregation
     aggregations: std.AutoHashMap(u128, *AttributeAggregationEntry),
 
-    // Pre-allocated pool of aggregation entries
-    aggregation_pool: [MAX_CARDINALITY]AttributeAggregationEntry,
+    // Pool of aggregation entries. Allocated at init() with the configured
+    // cardinality limit, so the limit is a runtime choice and the memory cost
+    // (sizeof(AttributeAggregationEntry) ~= 288 B per slot) scales with it.
+    aggregation_pool: []AttributeAggregationEntry,
     overflow_aggregation: AttributeAggregationEntry,
     next_free: std.atomic.Value(usize),
     allocator: std.mem.Allocator,
@@ -46,17 +53,28 @@ pub const AttributeAggregationMap = struct {
     // Lock to prevent map corruption
     mutex: std.atomic.Mutex,
 
-    /// Initialize the attribute aggregation map
-    pub fn init(allocator: std.mem.Allocator) !AttributeAggregationMap {
+    /// Initialize the attribute aggregation map.
+    ///
+    /// `cardinality_limit` is the maximum number of distinct
+    /// (instrument, attribute-set) series tracked per collection cycle.
+    /// Measurements past the limit are DROPPED (see overflow_aggregation below).
+    pub fn init(allocator: std.mem.Allocator, cardinality_limit: usize) !AttributeAggregationMap {
+        const limit = @max(cardinality_limit, 1);
+        const pool = try allocator.alloc(AttributeAggregationEntry, limit);
+        errdefer allocator.free(pool);
         return .{
             .aggregations = std.AutoHashMap(u128, *AttributeAggregationEntry).init(allocator),
-            .aggregation_pool = undefined, // Will be initialized as needed
+            .aggregation_pool = pool,
             .next_free = .init(0),
             .allocator = allocator,
             .overflow_aggregation = .{
-                // This is pre-allocated outside of the stack to track when
-                // cardinality has been exhausted.
-                .aggregation = .{ .sum_i64 = .init() },
+                // Pre-allocated sentinel returned once the cardinality limit is
+                // reached. It is a DROP aggregation: with a typed aggregation
+                // here (the old .sum_i64), the first measurement of another
+                // value type would have been recorded into it (corrupting the
+                // series) or hit a type check. Dropping is the spec's behavior
+                // for cardinality overflow.
+                .aggregation = .{ .drop = {} },
                 .attributes = try api.AttributeBuilder.init(allocator).finish(allocator), // This is owning for the aggregation
                 .metadata = .{
                     // This is non-owning for the aggregation.
@@ -87,6 +105,7 @@ pub const AttributeAggregationMap = struct {
         }
         self.overflow_aggregation.deinit(self.allocator);
         self.aggregations.deinit();
+        self.allocator.free(self.aggregation_pool);
     }
 
     /// Get or create aggregation for the given instrument and attribute combination
@@ -115,7 +134,7 @@ pub const AttributeAggregationMap = struct {
         const next_free = self.next_free.load(.monotonic);
 
         // Check cardinality limit
-        if (next_free >= MAX_CARDINALITY) {
+        if (next_free >= self.aggregation_pool.len) {
             return &self.overflow_aggregation;
         }
 
@@ -170,7 +189,7 @@ pub const AttributeAggregationMap = struct {
 
         const next_free = self.next_free.load(.monotonic);
 
-        if (next_free >= MAX_CARDINALITY) {
+        if (next_free >= self.aggregation_pool.len) {
             return &self.overflow_aggregation;
         }
 
@@ -228,6 +247,11 @@ pub const AttributeAggregationMap = struct {
         };
     }
 
+    /// Configured cardinality limit for this map (series tracked per cycle).
+    pub fn cardinalityLimit(self: *const AttributeAggregationMap) usize {
+        return self.aggregation_pool.len;
+    }
+
     /// Get current cardinality (number of unique attribute combinations)
     pub fn getCardinality(self: *const AttributeAggregationMap) usize {
         return self.next_free.load(.unordered);
@@ -235,7 +259,7 @@ pub const AttributeAggregationMap = struct {
 
     /// Check if cardinality limit has been exceeded
     pub fn hasExceededLimit(self: *const AttributeAggregationMap) bool {
-        return self.next_free.load(.monotonic) >= MAX_CARDINALITY;
+        return self.next_free.load(.monotonic) >= self.aggregation_pool.len;
     }
 
     /// Iterator for all aggregation entries
@@ -292,7 +316,7 @@ test "AttributeAggregationMap - basic operations" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var map = try AttributeAggregationMap.init(allocator);
+    var map = try AttributeAggregationMap.init(allocator, AttributeAggregationMap.DEFAULT_CARDINALITY_LIMIT);
     defer map.deinit();
 
     const metadata = sdk.MetricMetadata{
@@ -330,15 +354,104 @@ test "AttributeAggregationMap - basic operations" {
     try testing.expectEqual(@as(usize, 2), map.getCardinality());
 }
 
-test "AttributeAggregationMap - cardinality limit" {
+test "AttributeAggregationMap - runtime cardinality limit is honored" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var map = try AttributeAggregationMap.init(allocator);
+    // The limit is a runtime value: the pool is sized from it at init().
+    var map = try AttributeAggregationMap.init(allocator, 3);
     defer map.deinit();
 
-    // Fill up to the limit (using a smaller limit for testing)
-    // Note: In practice, MAX_CARDINALITY is 2000, but for testing we can't easily create that many
-    // This test verifies the logic works
+    try testing.expectEqual(@as(usize, 3), map.cardinalityLimit());
     try testing.expect(!map.hasExceededLimit());
+
+    const metadata = sdk.MetricMetadata{
+        .name = "test_counter",
+        .description = "Test counter",
+        .unit = "1",
+        .instrument_type = .Counter,
+        .instrumentation_scope = .{
+            .name = "test_meter",
+            .version = "1.0.0",
+            .schema_url = "",
+            .attributes = &[_]api.AttributeKeyValue{},
+        },
+    };
+
+    // 4 distinct attribute sets against a limit of 3: the 4th lands in the
+    // shared overflow entry and does NOT grow the cardinality.
+    const values = [_][]const u8{ "a", "b", "c", "d" };
+    for (values) |v| {
+        const attributes = [_]api.AttributeKeyValue{
+            .{ .key = "slot", .value = .{ .string = v } },
+        };
+        _ = map.getOrCreateAggregation(&attributes, metadata, 12345, .{ .i64 = 1 });
+    }
+
+    try testing.expectEqual(@as(usize, 3), map.getCardinality());
+    try testing.expectEqual(@as(usize, 3), map.aggregation_pool.len);
+    try testing.expect(map.hasExceededLimit());
 }
+
+test "AttributeAggregationMap - overflow drops either value type instead of aborting" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Regression: the overflow entry used to be a typed .sum_i64 aggregation.
+    // With a limit of 1, the second series (of any type) landed there, and a
+    // measurement of the other value type hit `unreachable` in
+    // Aggregation.record()/add() — a hard abort at host scale (AIA-60 crash
+    // loop, 2026-11-19). Overflow must DROP, for both i64 and f64.
+    var map = try AttributeAggregationMap.init(allocator, 1);
+    defer map.deinit();
+
+    const gauge_meta = sdk.MetricMetadata{
+        .name = "test_gauge",
+        .description = "Test gauge",
+        .unit = "1",
+        .instrument_type = .Gauge,
+        .instrumentation_scope = .{
+            .name = "test_meter",
+            .version = "1.0.0",
+            .schema_url = "",
+            .attributes = &[_]api.AttributeKeyValue{},
+        },
+    };
+    const counter_meta = sdk.MetricMetadata{
+        .name = "test_counter",
+        .description = "Test counter",
+        .unit = "1",
+        .instrument_type = .Counter,
+        .instrumentation_scope = .{
+            .name = "test_meter",
+            .version = "1.0.0",
+            .schema_url = "",
+            .attributes = &[_]api.AttributeKeyValue{},
+        },
+    };
+
+    const first = [_]api.AttributeKeyValue{
+        .{ .key = "slot", .value = .{ .string = "a" } },
+    };
+    // Fill the single slot with an i64 series.
+    _ = map.getOrCreateAggregation(&first, gauge_meta, 1, .{ .i64 = 7 });
+
+    // Everything below is over the limit and must be dropped, not recorded.
+    const second = [_]api.AttributeKeyValue{
+        .{ .key = "slot", .value = .{ .string = "b" } },
+    };
+    const overflow_f64 = map.getOrCreateAggregation(&second, gauge_meta, 1, .{ .f64 = 1.5 });
+    const overflow_i64 = map.getOrCreateAggregation(&second, counter_meta, 2, .{ .i64 = 9 });
+
+    try testing.expectEqual(AggregationTag.drop, std.meta.activeTag(overflow_f64.aggregation));
+    try testing.expectEqual(AggregationTag.drop, std.meta.activeTag(overflow_i64.aggregation));
+
+    // Neither value type may abort, and nothing may be recorded.
+    try testing.expect(!overflow_f64.aggregation.record(@as(f64, 1.0)));
+    try testing.expect(!overflow_f64.aggregation.record(@as(i64, 1)));
+    overflow_f64.aggregation.add(@as(i64, 1));
+    overflow_i64.aggregation.add(@as(f64, 1.0));
+
+    try testing.expectEqual(@as(usize, 1), map.getCardinality());
+}
+

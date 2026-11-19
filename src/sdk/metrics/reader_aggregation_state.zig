@@ -18,6 +18,17 @@ const sdk = struct {
     const aggregations = @import("aggregations.zig");
 };
 
+/// Reader construction options.
+///
+/// `cardinality_limit` bounds the number of distinct (instrument,
+/// attribute-set) series a reader tracks per collection cycle. Past the limit
+/// measurements are dropped, never buffered: the memory cost is
+/// sizeof(AttributeAggregationEntry) (~288 B) per slot, per reader, so the
+/// limit is the memory/visibility trade-off knob.
+pub const ReaderOptions = struct {
+    cardinality_limit: usize = sdk.AttributeAggregationMap.DEFAULT_CARDINALITY_LIMIT,
+};
+
 pub const AggregationTemporality = sdk.aggregations.AggregationTemporality;
 pub const AggregationType = sdk.aggregations.AggregationType;
 
@@ -54,9 +65,10 @@ pub const ReaderAggregationState = struct {
         allocator: std.mem.Allocator,
         temporality: AggregationTemporality,
         aggregation_selector: AggregationSelector,
+        cardinality_limit: usize,
     ) !@This() {
         return .{
-            .aggregations = try sdk.AttributeAggregationMap.init(allocator),
+            .aggregations = try sdk.AttributeAggregationMap.init(allocator, cardinality_limit),
             .allocator = allocator,
             .mutex = .unlocked,
             .temporality = temporality,
@@ -317,7 +329,7 @@ test "ReaderAggregationState - concurrent recordMeasurement and snapshot" {
     // work but page_allocator avoids the overhead of leak tracking here.
     const allocator = std.heap.page_allocator;
 
-    var state = try ReaderAggregationState.init(allocator, .delta, defaultAggregationSelector);
+    var state = try ReaderAggregationState.init(allocator, .delta, defaultAggregationSelector, sdk.AttributeAggregationMap.DEFAULT_CARDINALITY_LIMIT);
     defer state.deinit();
 
     const scope: api.InstrumentationScope = .{
