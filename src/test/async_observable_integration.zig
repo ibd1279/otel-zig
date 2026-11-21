@@ -29,19 +29,30 @@ const Resource = otel_sdk.resource.Resource;
 // Test fixture
 // ---------------------------------------------------------------------------
 
-/// Heap-allocates a ManualReader (backed by the noop exporter) and registers it
-/// with a new MeterProvider. The provider takes ownership of the reader.
+/// Heap-allocates a MeterProvider and a ManualReader (backed by the noop
+/// exporter) and registers the reader with the provider. The provider takes
+/// ownership of the reader.
 ///
-/// Call `provider.deinit()` when done; the reader is cleaned up automatically.
+/// The provider MUST live on the heap: getMeterWithScope stores a non-owning
+/// *MeterProvider inside the returned meter, so returning the provider by
+/// value would leave the meter pointing at this function's dead stack frame
+/// (a Bus error at observable-instrument creation once the caller reuses that
+/// stack memory).
+///
+/// Call `ctx.provider.deinit()` then `allocator.destroy(ctx.provider)` when
+/// done; the reader is cleaned up by the provider.
 fn makeProviderAndMeter(allocator: std.mem.Allocator) !struct {
-    provider: MeterProvider,
+    provider: *MeterProvider,
     reader: *ManualReader,
     meter: otel_api.metrics.Meter,
 } {
     const resource = Resource.empty;
-    var provider = MeterProvider.init(allocator, std.testing.io, resource);
+    const provider = try allocator.create(MeterProvider);
+    errdefer allocator.destroy(provider);
+    provider.* = MeterProvider.init(allocator, std.testing.io, resource);
 
     const reader = try allocator.create(ManualReader);
+    errdefer allocator.destroy(reader);
     reader.* = try ManualReader.init(allocator, std.testing.io, MetricExporter{ .noop = {} });
     try provider.registerReader(reader.reader());
 
@@ -58,7 +69,10 @@ fn makeProviderAndMeter(allocator: std.mem.Allocator) !struct {
 test "observable counter, gauge, and updown counter all invoke their callbacks" {
     const allocator = testing.allocator;
     var ctx = try makeProviderAndMeter(allocator);
-    defer ctx.provider.deinit();
+    defer {
+        ctx.provider.deinit();
+        allocator.destroy(ctx.provider);
+    }
 
     var counter_calls = std.atomic.Value(u32).init(0);
     var gauge_calls = std.atomic.Value(u32).init(0);
@@ -132,7 +146,10 @@ test "observable counter, gauge, and updown counter all invoke their callbacks" 
 test "stateless callbacks are invoked on collection" {
     const allocator = testing.allocator;
     var ctx = try makeProviderAndMeter(allocator);
-    defer ctx.provider.deinit();
+    defer {
+        ctx.provider.deinit();
+        allocator.destroy(ctx.provider);
+    }
 
     var calls = std.atomic.Value(u32).init(0);
 
@@ -171,7 +188,10 @@ test "stateless callbacks are invoked on collection" {
 test "callbacks provided at instrument creation time are invoked" {
     const allocator = testing.allocator;
     var ctx = try makeProviderAndMeter(allocator);
-    defer ctx.provider.deinit();
+    defer {
+        ctx.provider.deinit();
+        allocator.destroy(ctx.provider);
+    }
 
     var calls = std.atomic.Value(u32).init(0);
 
@@ -209,7 +229,10 @@ test "callbacks provided at instrument creation time are invoked" {
 test "multiple callbacks registered on one instrument all execute" {
     const allocator = testing.allocator;
     var ctx = try makeProviderAndMeter(allocator);
-    defer ctx.provider.deinit();
+    defer {
+        ctx.provider.deinit();
+        allocator.destroy(ctx.provider);
+    }
 
     var calls_a = std.atomic.Value(u32).init(0);
     var calls_b = std.atomic.Value(u32).init(0);
@@ -253,7 +276,10 @@ test "multiple callbacks registered on one instrument all execute" {
 test "unregistered callback is not invoked on subsequent collections" {
     const allocator = testing.allocator;
     var ctx = try makeProviderAndMeter(allocator);
-    defer ctx.provider.deinit();
+    defer {
+        ctx.provider.deinit();
+        allocator.destroy(ctx.provider);
+    }
 
     var calls = std.atomic.Value(u32).init(0);
 
@@ -293,7 +319,10 @@ test "unregistered callback is not invoked on subsequent collections" {
 test "concurrent callback registration and unregistration does not race" {
     const allocator = testing.allocator;
     var ctx = try makeProviderAndMeter(allocator);
-    defer ctx.provider.deinit();
+    defer {
+        ctx.provider.deinit();
+        allocator.destroy(ctx.provider);
+    }
 
     // A baseline callback that always runs; used to confirm the instrument
     // remains functional throughout the concurrent registrations.

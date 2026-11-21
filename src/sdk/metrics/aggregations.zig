@@ -25,8 +25,16 @@ pub const Aggregation = union(enum) {
     // cardinality pool is exhausted (the shared overflow entry) or when a
     // selector/view changes aggregation kind. Aborting the whole process over
     // one unusable data point is never the right degradation.
+    //
+    // add() is only meaningful for the sum aggregations; last-value and
+    // histogram kinds discard here by design (use record() for those). The
+    // value type is still checked at compile time — only i64/f64 are accepted,
+    // so an untyped literal is a compile error, not a silent no-op.
     pub fn add(self: *Aggregation, value: anytype) void {
         const T = @TypeOf(value);
+        comptime {
+            if (T != i64 and T != f64) @compileError("Aggregation.add expects an i64 or f64 value");
+        }
         switch (self.*) {
             .sum_i64 => |*s| if (T == i64) s.add(value),
             .sum_f64 => |*s| if (T == f64) s.add(value),
@@ -38,9 +46,13 @@ pub const Aggregation = union(enum) {
     ///
     /// Returns false when the measurement was discarded (drop aggregation, or a
     /// value/aggregation type mismatch). See add() for why a mismatch must not
-    /// be `unreachable`.
+    /// be `unreachable`. The value type is checked at compile time (i64/f64
+    /// only); a runtime tag mismatch still discards instead of aborting.
     pub fn record(self: *Aggregation, value: anytype) bool {
         const T = @TypeOf(value);
+        comptime {
+            if (T != i64 and T != f64) @compileError("Aggregation.record expects an i64 or f64 value");
+        }
         switch (self.*) {
             .sum_i64 => |*s| return if (T == i64) s.record(value, false) else false,
             .sum_f64 => |*s| return if (T == f64) s.record(value, false) else false,

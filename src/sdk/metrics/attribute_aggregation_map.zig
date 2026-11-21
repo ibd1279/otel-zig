@@ -48,6 +48,10 @@ pub const AttributeAggregationMap = struct {
     aggregation_pool: []AttributeAggregationEntry,
     overflow_aggregation: AttributeAggregationEntry,
     next_free: std.atomic.Value(usize),
+    // Measurements handed to the overflow (drop) entry since the last
+    // snapshot(). Distinguishes "at capacity" from "actually overflowed" and
+    // gives callers an observable drop count.
+    overflow_count: std.atomic.Value(usize),
     allocator: std.mem.Allocator,
 
     // Lock to prevent map corruption
@@ -66,6 +70,7 @@ pub const AttributeAggregationMap = struct {
             .aggregations = std.AutoHashMap(u128, *AttributeAggregationEntry).init(allocator),
             .aggregation_pool = pool,
             .next_free = .init(0),
+            .overflow_count = .init(0),
             .allocator = allocator,
             .overflow_aggregation = .{
                 // Pre-allocated sentinel returned once the cardinality limit is
@@ -108,6 +113,14 @@ pub const AttributeAggregationMap = struct {
         self.allocator.free(self.aggregation_pool);
     }
 
+    /// Return the shared overflow (drop) entry and count the drop. Every path
+    /// that cannot produce a real series entry funnels through here, so
+    /// overflowCount()/hasExceededLimit() see every discarded measurement.
+    fn overflowEntry(self: *AttributeAggregationMap) *AttributeAggregationEntry {
+        _ = self.overflow_count.fetchAdd(1, .monotonic);
+        return &self.overflow_aggregation;
+    }
+
     /// Get or create aggregation for the given instrument and attribute combination
     pub fn getOrCreateAggregation(
         self: *AttributeAggregationMap,
@@ -135,7 +148,7 @@ pub const AttributeAggregationMap = struct {
 
         // Check cardinality limit
         if (next_free >= self.aggregation_pool.len) {
-            return &self.overflow_aggregation;
+            return self.overflowEntry();
         }
 
         // Get next aggregation entry from pool
@@ -144,14 +157,15 @@ pub const AttributeAggregationMap = struct {
         // Create owned attributes for this aggregation.
         const owned_attributes = api.AttributeKeyValue.initOwnedSlice(self.allocator, attributes) catch {
             // On error, return overflow
-            return &self.overflow_aggregation;
+            return self.overflowEntry();
         };
 
         // Initialize aggregation entry based on instrument type and value type
         entry.* = .{
             .aggregation = self.createAggregationForType(metadata, value) catch {
-                // On error, return overflow
-                return &self.overflow_aggregation;
+                // On error, free the owned attributes and return overflow.
+                api.AttributeKeyValue.deinitOwnedSlice(self.allocator, owned_attributes);
+                return self.overflowEntry();
             },
             .attributes = owned_attributes,
             .metadata = metadata,
@@ -161,7 +175,7 @@ pub const AttributeAggregationMap = struct {
         self.aggregations.put(combined_hash, entry) catch {
             // On error, clean up and return overflow
             entry.deinit(self.allocator);
-            return &self.overflow_aggregation;
+            return self.overflowEntry();
         };
 
         // we made it this far, which means we created a new aggregation.
@@ -190,18 +204,20 @@ pub const AttributeAggregationMap = struct {
         const next_free = self.next_free.load(.monotonic);
 
         if (next_free >= self.aggregation_pool.len) {
-            return &self.overflow_aggregation;
+            return self.overflowEntry();
         }
 
         const entry = &self.aggregation_pool[next_free];
 
         const owned_attributes = api.AttributeKeyValue.initOwnedSlice(self.allocator, attributes) catch {
-            return &self.overflow_aggregation;
+            return self.overflowEntry();
         };
 
         entry.* = .{
             .aggregation = self.createAggregationForType(metadata, value) catch {
-                return &self.overflow_aggregation;
+                // Free the owned attributes before dropping to overflow.
+                api.AttributeKeyValue.deinitOwnedSlice(self.allocator, owned_attributes);
+                return self.overflowEntry();
             },
             .attributes = owned_attributes,
             .metadata = metadata,
@@ -209,7 +225,7 @@ pub const AttributeAggregationMap = struct {
 
         self.aggregations.put(combined_hash, entry) catch {
             entry.deinit(self.allocator);
-            return &self.overflow_aggregation;
+            return self.overflowEntry();
         };
 
         _ = self.next_free.fetchAdd(1, .acq_rel);
@@ -257,9 +273,18 @@ pub const AttributeAggregationMap = struct {
         return self.next_free.load(.unordered);
     }
 
-    /// Check if cardinality limit has been exceeded
+    /// True when at least one measurement was dropped to the overflow entry
+    /// this cycle. Being at capacity (next_free == pool.len) with zero drops
+    /// is NOT overflow — the limit-th series still fits in the pool.
     pub fn hasExceededLimit(self: *const AttributeAggregationMap) bool {
-        return self.next_free.load(.monotonic) >= self.aggregation_pool.len;
+        return self.overflow_count.load(.monotonic) > 0;
+    }
+
+    /// Number of measurements dropped to the overflow entry since the last
+    /// snapshot(). An observable drop count for callers/monitors; the overflow
+    /// entry itself is never exported as a series.
+    pub fn overflowCount(self: *const AttributeAggregationMap) usize {
+        return self.overflow_count.load(.monotonic);
     }
 
     /// Iterator for all aggregation entries
@@ -308,6 +333,7 @@ pub const AttributeAggregationMap = struct {
         }
         self.overflow_aggregation.aggregation.reset(io);
         self.next_free.store(0, .monotonic);
+        self.overflow_count.store(0, .monotonic);
         self.aggregations.clearRetainingCapacity();
     }
 };
@@ -378,9 +404,9 @@ test "AttributeAggregationMap - runtime cardinality limit is honored" {
         },
     };
 
-    // 4 distinct attribute sets against a limit of 3: the 4th lands in the
-    // shared overflow entry and does NOT grow the cardinality.
-    const values = [_][]const u8{ "a", "b", "c", "d" };
+    // 3 distinct attribute sets fill the pool exactly: at capacity, but no
+    // measurement has been dropped yet, so the limit is NOT exceeded.
+    const values = [_][]const u8{ "a", "b", "c" };
     for (values) |v| {
         const attributes = [_]api.AttributeKeyValue{
             .{ .key = "slot", .value = .{ .string = v } },
@@ -390,7 +416,33 @@ test "AttributeAggregationMap - runtime cardinality limit is honored" {
 
     try testing.expectEqual(@as(usize, 3), map.getCardinality());
     try testing.expectEqual(@as(usize, 3), map.aggregation_pool.len);
+    try testing.expect(!map.hasExceededLimit());
+    try testing.expectEqual(@as(usize, 0), map.overflowCount());
+
+    // The 4th series lands in the shared overflow entry: dropped, counted,
+    // and does NOT grow the cardinality.
+    const fourth = [_]api.AttributeKeyValue{
+        .{ .key = "slot", .value = .{ .string = "d" } },
+    };
+    const overflow = map.getOrCreateAggregation(&fourth, metadata, 12345, .{ .i64 = 1 });
+    try testing.expectEqual(&map.overflow_aggregation, overflow);
+    try testing.expectEqual(@as(usize, 3), map.getCardinality());
     try testing.expect(map.hasExceededLimit());
+    try testing.expectEqual(@as(usize, 1), map.overflowCount());
+
+    // Another over-limit measurement counts another drop.
+    _ = map.getOrCreateAggregation(&fourth, metadata, 12345, .{ .i64 = 1 });
+    try testing.expectEqual(@as(usize, 2), map.overflowCount());
+
+    // snapshot() resets the per-cycle overflow state along with the pool.
+    var entry_list = std.ArrayList(AttributeAggregationEntry).empty;
+    defer entry_list.deinit(allocator);
+    try map.snapshot(allocator, &entry_list, testing.io);
+    for (entry_list.items) |*entry| entry.deinit(allocator);
+    try testing.expectEqual(@as(usize, 3), entry_list.items.len);
+    try testing.expectEqual(@as(usize, 0), map.getCardinality());
+    try testing.expectEqual(@as(usize, 0), map.overflowCount());
+    try testing.expect(!map.hasExceededLimit());
 }
 
 test "AttributeAggregationMap - overflow drops either value type instead of aborting" {
@@ -453,5 +505,52 @@ test "AttributeAggregationMap - overflow drops either value type instead of abor
     overflow_i64.aggregation.add(@as(f64, 1.0));
 
     try testing.expectEqual(@as(usize, 1), map.getCardinality());
+}
+
+test "AttributeAggregationMap - aggregation-creation failure frees owned attributes" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Regression: owned_attributes is allocated BEFORE createAggregationForType.
+    // When histogram bucket allocation fails there, the catch arm must free the
+    // owned attributes on its way to the overflow entry — testing.allocator
+    // reports any leak as a test failure.
+    const hist_meta = sdk.MetricMetadata{
+        .name = "test_histogram",
+        .description = "Test histogram",
+        .unit = "ms",
+        .instrument_type = .Histogram,
+        .instrumentation_scope = .{
+            .name = "test_meter",
+            .version = "1.0.0",
+            .schema_url = "",
+            .attributes = &[_]api.AttributeKeyValue{},
+        },
+    };
+    const attributes = [_]api.AttributeKeyValue{
+        .{ .key = "slot", .value = .{ .string = "a" } },
+    };
+
+    // Count the allocations initOwnedSlice needs for this attribute set, so
+    // the failing allocator below lets the owned attributes succeed and fails
+    // the FIRST histogram allocation inside createAggregationForType.
+    var counter = testing.FailingAllocator.init(allocator, .{});
+    const owned = try api.AttributeKeyValue.initOwnedSlice(counter.allocator(), &attributes);
+    const attr_allocs = counter.alloc_index;
+    api.AttributeKeyValue.deinitOwnedSlice(counter.allocator(), owned);
+
+    var map = try AttributeAggregationMap.init(allocator, 4);
+    defer map.deinit();
+    var failing = testing.FailingAllocator.init(allocator, .{ .fail_index = attr_allocs });
+    map.allocator = failing.allocator();
+
+    const entry = map.getOrCreateAggregation(&attributes, hist_meta, 1, .{ .f64 = 1.0 });
+
+    // The histogram allocation failed, so the series went to overflow...
+    try testing.expect(failing.has_induced_failure);
+    try testing.expectEqual(&map.overflow_aggregation, entry);
+    try testing.expectEqual(@as(usize, 0), map.getCardinality());
+    try testing.expectEqual(@as(usize, 1), map.overflowCount());
+    // ...and the owned attributes allocated before the failure were freed.
 }
 
