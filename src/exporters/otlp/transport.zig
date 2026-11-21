@@ -371,7 +371,43 @@ const Run = struct {
                 client.now = now;
             }
         }
+        // IP-literal dial (fix/otlp-ipv6-literal-dial): std.http.Client's
+        // request() routes the URI host through HostName.fromUri, whose
+        // RFC-1123 validate() rejects bracketed IPv6 authorities
+        // (error.InvalidHostName) before any packet is sent — a zig 0.17
+        // regression against 0.16's non-validating Uri.getHost. For an
+        // authority that names an address literal (bracketed IPv6 or dotted
+        // IPv4), build the HostName ourselves (brackets stripped; the
+        // lookup layer dials literals without validation) and pre-dial the
+        // connection through the public connectTcpOptions, then hand it to
+        // request() via RequestOptions.connection. Headers, body framing,
+        // and response parsing stay entirely on the std.http path, and
+        // DNS-named endpoints take the untouched default branch.
+        var host_name_buffer: [std.Io.net.HostName.max_len]u8 = undefined;
+        const pre_connection: ?*std.http.Client.Connection = dial: {
+            const protocol = std.http.Client.Protocol.fromUri(request_uri) orelse break :dial null;
+            const host_component = request_uri.host orelse break :dial null;
+            var raw_buf: [std.Io.net.HostName.max_len]u8 = undefined;
+            const raw = host_component.toRaw(&raw_buf) catch break :dial null;
+            var host = raw;
+            if (host.len >= 2 and host[0] == '[' and host[host.len - 1] == ']') host = host[1 .. host.len - 1];
+            const port: u16 = request_uri.port orelse switch (protocol) {
+                .tls => 443,
+                .plain => 80,
+            };
+            // Gate: only literals take this branch; names go through the
+            // default fromUri path unchanged.
+            _ = std.Io.net.IpAddress.parse(host, port) catch break :dial null;
+            @memcpy(host_name_buffer[0..host.len], host);
+            const pool_host: std.Io.net.HostName = .{ .bytes = host_name_buffer[0..host.len] };
+            break :dial try client.connectTcpOptions(.{
+                .host = pool_host,
+                .port = port,
+                .protocol = protocol,
+            });
+        };
         var request = try client.request(.POST, request_uri, .{
+            .connection = pre_connection,
             .headers = .{
                 .content_type = .{ .override = request_content_type },
                 .user_agent = .{ .override = "otel-zig-otlp" },
@@ -516,4 +552,102 @@ test "port-less endpoint defaults to the OTLP HTTP port 4318" {
     const ipv6 = try signalUrl(testing.allocator, .{ .io = std.testing.io, .endpoint = "http://[::1]/" }, "/v1/traces");
     defer testing.allocator.free(ipv6);
     try testing.expectEqualStrings("http://[::1]:4318/v1/traces", ipv6);
+}
+
+test "ip-literal endpoint exports over a bracketed IPv6 authority (full post path)" {
+    // The dial path under test: a bracketed IPv6 authority must reach a
+    // listener on [::1] through the real std.http transport. Before the
+    // literal-dial fix this failed with error.InvalidHostName inside
+    // HostName.fromUri, before any packet was sent.
+    const testing = std.testing;
+    const io = std.testing.io;
+
+    var addr = try std.Io.net.IpAddress.parse("::1", 0);
+    var listener = try addr.listen(io, .{ .reuse_address = true });
+    defer listener.deinit(io);
+    // Io.net.Server does not expose the bound address; read it from the socket.
+    var bound: std.Io.net.IpAddress = undefined;
+    {
+        var sa: std.posix.sockaddr.in6 = undefined;
+        var sa_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in6);
+        if (std.c.getsockname(listener.socket.handle, @ptrCast(&sa), &sa_len) != 0) return error.Unexpected;
+        bound = .{ .ip6 = .{ .port = std.mem.bigToNative(u16, sa.port), .bytes = std.mem.toBytes(sa.addr) } };
+    }
+    const port = bound.getPort();
+
+    const Acceptor = struct {
+        fn run(l: *std.Io.net.Server) void {
+            const conn = l.accept(io) catch return;
+            defer conn.close(io);
+            var read_buf: [4096]u8 = undefined;
+            var rd = conn.reader(io, &read_buf);
+            // Drain the request head + body.
+            while (true) {
+                const line = rd.interface.takeDelimiterExclusive('\n') catch break;
+                if (line.len == 0 or std.mem.eql(u8, line, "\r")) break;
+            }
+            var wbuf: [256]u8 = undefined;
+            var w = conn.writer(io, &wbuf);
+            w.interface.writeAll("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n") catch {};
+            w.interface.flush() catch {};
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Acceptor.run, .{&listener});
+    defer thread.join();
+
+    var url_buf: [128]u8 = undefined;
+    const url = try std.fmt.bufPrint(&url_buf, "http://[::1]:{d}/v1/metrics", .{port});
+    const config: OtlpExporterConfig = .{
+        .io = io,
+        .endpoint = url,
+        .retry_config = .{ .enabled = false },
+    };
+    const result = post(testing.allocator, testing.allocator, config, url, "application/x-protobuf", &.{}, "payload", "metrics");
+    try testing.expectEqual(ExportResult.success, try result);
+}
+
+test "dotted IPv4 literal authority also takes the pre-dial path" {
+    const testing = std.testing;
+    const io = std.testing.io;
+
+    var addr = std.Io.net.IpAddress{ .ip4 = .loopback(0) };
+    var listener = try addr.listen(io, .{ .reuse_address = true });
+    defer listener.deinit(io);
+    var bound4: std.Io.net.IpAddress = undefined;
+    {
+        var sa: std.posix.sockaddr.in = undefined;
+        var sa_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr.in);
+        if (std.c.getsockname(listener.socket.handle, @ptrCast(&sa), &sa_len) != 0) return error.Unexpected;
+        bound4 = .{ .ip4 = .{ .port = std.mem.bigToNative(u16, sa.port), .bytes = std.mem.toBytes(sa.addr) } };
+    }
+    const port = bound4.getPort();
+
+    const Acceptor = struct {
+        fn run(l: *std.Io.net.Server) void {
+            const conn = l.accept(io) catch return;
+            defer conn.close(io);
+            var read_buf: [4096]u8 = undefined;
+            var rd = conn.reader(io, &read_buf);
+            // Drain the request head + body.
+            while (true) {
+                const line = rd.interface.takeDelimiterExclusive('\n') catch break;
+                if (line.len == 0 or std.mem.eql(u8, line, "\r")) break;
+            }
+            var wbuf: [256]u8 = undefined;
+            var w = conn.writer(io, &wbuf);
+            w.interface.writeAll("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n") catch {};
+            w.interface.flush() catch {};
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Acceptor.run, .{&listener});
+    defer thread.join();
+
+    var url_buf: [128]u8 = undefined;
+    const url = try std.fmt.bufPrint(&url_buf, "http://127.0.0.1:{d}/v1/logs", .{port});
+    const config: OtlpExporterConfig = .{
+        .io = io,
+        .endpoint = url,
+        .retry_config = .{ .enabled = false },
+    };
+    try testing.expectEqual(ExportResult.success, try post(testing.allocator, testing.allocator, config, url, "application/x-protobuf", &.{}, "payload", "logs"));
 }
