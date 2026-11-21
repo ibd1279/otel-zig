@@ -19,6 +19,7 @@ const sdk = struct {
     const Reader = @import("reader.zig").Reader;
     const MetricExporter = @import("exporter.zig").MetricExporter;
     const ReaderAggregationState = @import("reader_aggregation_state.zig").ReaderAggregationState;
+    const ReaderOptions = @import("reader_aggregation_state.zig").ReaderOptions;
     const MetricMetadata = @import("metadata.zig").MetricMetadata;
     const MetricValue = @import("reader.zig").MetricValue;
     const Resource = @import("../resource/resource.zig").Resource;
@@ -29,6 +30,12 @@ pub const PeriodicReader = struct {
     pub const Config = struct {
         io: std.Io,
         interval_ms: ?u32 = null,
+        /// Maximum number of distinct (instrument, attribute-set) series this
+        /// reader tracks per collection cycle. null = the SDK default
+        /// (DEFAULT_CARDINALITY_LIMIT, 2000). Past the limit, measurements are
+        /// dropped; raising it costs sizeof(AttributeAggregationEntry) (~288 B)
+        /// per slot, per reader.
+        cardinality_limit: ?usize = null,
     };
 
     pub const PipelineStep = @import("../common/pipeline.zig").PipelineStepInstructions(
@@ -40,7 +47,9 @@ pub const PeriodicReader = struct {
         setExporter,
     );
     pub fn _initFn(self: *PeriodicReader, ctx: Config, allocator: std.mem.Allocator) !void {
-        self.* = try init(allocator, ctx.io, null, ctx.interval_ms);
+        self.* = try initWithOptions(allocator, ctx.io, null, ctx.interval_ms, .{
+            .cardinality_limit = ctx.cardinality_limit orelse (sdk.ReaderOptions{}).cardinality_limit,
+        });
         try self.start();
     }
 
@@ -70,6 +79,22 @@ pub const PeriodicReader = struct {
         exporter: ?sdk.MetricExporter,
         collection_interval_ms: ?u32,
     ) !PeriodicReader {
+        return initWithOptions(allocator, io, exporter, collection_interval_ms, .{});
+    }
+
+    /// Same as init(), but with explicit reader options.
+    ///
+    /// The knob that matters in practice is `cardinality_limit`: the number of
+    /// distinct (instrument, attribute-set) series this reader tracks per
+    /// collection cycle. Raise it for hosts with many processes/jails; past the
+    /// limit measurements are dropped, never buffered.
+    pub fn initWithOptions(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        exporter: ?sdk.MetricExporter,
+        collection_interval_ms: ?u32,
+        options: sdk.ReaderOptions,
+    ) !PeriodicReader {
         return .{
             .allocator = allocator,
             .io = io,
@@ -88,6 +113,7 @@ pub const PeriodicReader = struct {
                 allocator,
                 .delta, // Default to Delta temporality for now
                 @import("reader_aggregation_state.zig").defaultAggregationSelector,
+                options.cardinality_limit,
             ),
         };
     }
@@ -532,4 +558,17 @@ test "PeriodicReader and Observable instrument test." {
         }
     }
     try testing.expect(found);
+}
+
+test "PeriodicReader - cardinality limit option is applied" {
+    const testing = std.testing;
+    var processor = try PeriodicReader.initWithOptions(
+        testing.allocator,
+        std.testing.io,
+        null,
+        100,
+        .{ .cardinality_limit = 5 },
+    );
+    defer processor.deinit();
+    try testing.expectEqual(@as(usize, 5), processor.reader_state.aggregations.cardinalityLimit());
 }

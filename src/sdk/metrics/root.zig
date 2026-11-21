@@ -18,6 +18,12 @@ pub const BridgeReader = reader.BridgeReader;
 pub const ManualReader = @import("manual_reader.zig").ManualReader;
 pub const PeriodicReader = @import("periodic_reader.zig").PeriodicReader;
 
+// Reader construction options (cardinality limit) and the default limit, so
+// applications can size the per-cycle series budget without importing SDK
+// internals.
+pub const ReaderOptions = @import("reader_aggregation_state.zig").ReaderOptions;
+pub const DEFAULT_CARDINALITY_LIMIT = @import("attribute_aggregation_map.zig").AttributeAggregationMap.DEFAULT_CARDINALITY_LIMIT;
+
 const data_zig = @import("data.zig");
 pub const MetricData = data_zig.MetricData;
 pub const MetricDataPoint = data_zig.MetricDataPoint;

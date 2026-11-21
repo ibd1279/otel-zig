@@ -18,28 +18,66 @@ pub const Aggregation = union(enum) {
     drop: void, // Drop aggregation - ignores all measurements
 
     // Add a measurement to this aggregation (lock-free)
+    //
+    // Type mismatches and drop aggregations DISCARD the measurement. This is a
+    // runtime condition, not a programmer error: a reader can hand a value to an
+    // aggregation chosen for a different value type when the per-cycle
+    // cardinality pool is exhausted (the shared overflow entry) or when a
+    // selector/view changes aggregation kind. Aborting the whole process over
+    // one unusable data point is never the right degradation.
+    //
+    // add() is only meaningful for the sum aggregations; last-value and
+    // histogram kinds discard here by design (use record() for those). The
+    // value type is still checked at compile time — only i64/f64 are accepted,
+    // so an untyped literal is a compile error, not a silent no-op.
     pub fn add(self: *Aggregation, value: anytype) void {
         const T = @TypeOf(value);
+        comptime {
+            if (T != i64 and T != f64) @compileError("Aggregation.add expects an i64 or f64 value");
+        }
         switch (self.*) {
-            .sum_i64 => |*s| if (T == i64) s.add(value) else unreachable,
-            .sum_f64 => |*s| if (T == f64) s.add(value) else unreachable,
-            else => unreachable,
+            .sum_i64 => |*s| if (T == i64) s.add(value),
+            .sum_f64 => |*s| if (T == f64) s.add(value),
+            else => {},
         }
     }
 
     /// Record a measurement on this aggregation (lock-free)
+    ///
+    /// Returns false when the measurement was discarded (drop aggregation, or a
+    /// value/aggregation type mismatch). See add() for why a mismatch must not
+    /// be `unreachable`. The value type is checked at compile time (i64/f64
+    /// only); a runtime tag mismatch still discards instead of aborting.
     pub fn record(self: *Aggregation, value: anytype) bool {
         const T = @TypeOf(value);
-        switch (self.*) {
-            .sum_i64 => |*s| if (T == i64) return s.record(value, false) else unreachable,
-            .sum_f64 => |*s| if (T == f64) return s.record(value, false) else unreachable,
-            .last_value_i64 => |*lv| if (T == i64) lv.record(value) else unreachable,
-            .last_value_f64 => |*lv| if (T == f64) lv.record(value) else unreachable,
-            .histogram_i64 => |*h| if (T == i64) h.record(value) else unreachable,
-            .histogram_f64 => |*h| if (T == f64) h.record(value) else unreachable,
-            .drop => {}, // Intentionally do nothing
+        comptime {
+            if (T != i64 and T != f64) @compileError("Aggregation.record expects an i64 or f64 value");
         }
-        return true;
+        switch (self.*) {
+            .sum_i64 => |*s| return if (T == i64) s.record(value, false) else false,
+            .sum_f64 => |*s| return if (T == f64) s.record(value, false) else false,
+            .last_value_i64 => |*lv| {
+                if (T != i64) return false;
+                lv.record(value);
+                return true;
+            },
+            .last_value_f64 => |*lv| {
+                if (T != f64) return false;
+                lv.record(value);
+                return true;
+            },
+            .histogram_i64 => |*h| {
+                if (T != i64) return false;
+                h.record(value);
+                return true;
+            },
+            .histogram_f64 => |*h| {
+                if (T != f64) return false;
+                h.record(value);
+                return true;
+            },
+            .drop => return false, // Intentionally discarded
+        }
     }
 
     pub fn reset(self: *Aggregation, io: std.Io) void {
@@ -469,4 +507,28 @@ test "HistogramAggregation" {
     try testing.expect(histogram.getStartTime().nanoseconds != old_ts.nanoseconds or old_ts.nanoseconds == 0);
 
     histogram.deinit(allocator);
+}
+
+test "Aggregation - type mismatch and drop discard instead of aborting" {
+
+    // Regression for the host-scale crash loop (2026-11-19): a value whose type
+    // does not match the aggregation must be discarded, never `unreachable`.
+    var sum: Aggregation = .{ .sum_i64 = .init() };
+    defer sum.deinit(testing.allocator);
+    try testing.expect(!sum.record(@as(f64, 1.5)));
+    try testing.expect(sum.record(@as(i64, 2)));
+    sum.add(@as(f64, 3.0)); // must not abort
+    sum.add(@as(i64, 4)); // still usable afterwards
+    try testing.expectEqual(@as(i64, 6), sum.sum_i64.value.load(.monotonic));
+
+    var last: Aggregation = .{ .last_value_f64 = .init() };
+    defer last.deinit(testing.allocator);
+    try testing.expect(!last.record(@as(i64, 1)));
+    try testing.expect(last.record(@as(f64, 2.5)));
+
+    var drop: Aggregation = .{ .drop = {} };
+    try testing.expect(!drop.record(@as(i64, 1)));
+    try testing.expect(!drop.record(@as(f64, 1.0)));
+    drop.add(@as(i64, 1)); // must not abort
+    drop.add(@as(f64, 1.0));
 }

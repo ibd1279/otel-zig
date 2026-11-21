@@ -16,6 +16,7 @@ const sdk = struct {
     const Reader = @import("reader.zig").Reader;
     const MetricData = @import("data.zig").MetricData;
     const ReaderAggregationState = @import("reader_aggregation_state.zig").ReaderAggregationState;
+    const ReaderOptions = @import("reader_aggregation_state.zig").ReaderOptions;
     const MetricMetadata = @import("metadata.zig").MetricMetadata;
     const MetricValue = @import("reader.zig").MetricValue;
     const Resource = @import("../resource/resource.zig").Resource;
@@ -27,6 +28,9 @@ const sdk = struct {
 pub const ManualReader = struct {
     pub const Config = struct {
         io: std.Io,
+        /// Maximum number of distinct (instrument, attribute-set) series this
+        /// reader tracks per collection cycle (null = SDK default, 2000).
+        cardinality_limit: ?usize = null,
     };
 
     pub const PipelineStep = @import("../common/pipeline.zig").PipelineStepInstructions(
@@ -38,7 +42,9 @@ pub const ManualReader = struct {
         setExporter,
     );
     pub fn _initFn(self: *ManualReader, ctx: Config, allocator: std.mem.Allocator) !void {
-        self.* = try init(allocator, ctx.io, null);
+        self.* = try initWithOptions(allocator, ctx.io, null, .{
+            .cardinality_limit = ctx.cardinality_limit orelse (sdk.ReaderOptions{}).cardinality_limit,
+        });
     }
 
     allocator: std.mem.Allocator,
@@ -51,6 +57,16 @@ pub const ManualReader = struct {
     resource: sdk.Resource = sdk.Resource.empty,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, exporter: ?sdk.MetricExporter) !ManualReader {
+        return initWithOptions(allocator, io, exporter, .{});
+    }
+
+    /// Same as init(), but with explicit reader options (cardinality limit).
+    pub fn initWithOptions(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        exporter: ?sdk.MetricExporter,
+        options: sdk.ReaderOptions,
+    ) !ManualReader {
         return .{
             .allocator = allocator,
             .io = io,
@@ -62,6 +78,7 @@ pub const ManualReader = struct {
                 allocator,
                 .delta, // Default to Delta temporality for now
                 @import("reader_aggregation_state.zig").defaultAggregationSelector,
+                options.cardinality_limit,
             ),
         };
     }
